@@ -197,7 +197,7 @@ export default function App() {
       const parsed = await parseMasterFile(file);
       const nextHistory: PersistedHistoryItem[] = [
         {
-          id: crypto.randomUUID(),
+          id: createHistoryId(),
           name: file.name,
           importedAt: parsed.summary.importedAt,
           summary: parsed.summary,
@@ -372,7 +372,7 @@ function ImportView({ inputRef, uploading, uploadMessage, onChooseFile, onFileSe
   return (
     <section className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
       <Panel title="상품 마스터 업로드" icon={<UploadIcon className="h-5 w-5" />}>
-        <input ref={inputRef} type="file" accept=".txt,text/plain" className="hidden" onChange={onFileSelected} />
+        <input ref={inputRef} type="file" accept=".txt,.dat,.mst,.csv,text/plain,text/csv" className="hidden" onChange={onFileSelected} />
         <button onClick={onChooseFile} className="group flex min-h-[320px] w-full flex-col items-center justify-center rounded-[2rem] border-2 border-dashed border-[#9eb3c7] bg-[#f0f4f8] p-8 transition-colors hover:bg-[#e7f0fb]">
           <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-white shadow-sm transition-transform duration-200 group-hover:scale-110"><UploadIcon className="h-10 w-10 text-[#002542]" /></div>
           <h2 className="mb-2 text-xl font-bold tracking-tight text-[#171c1f]">TXT 마스터 파일 업로드</h2>
@@ -541,4 +541,12 @@ function stopScanner(videoRef: React.RefObject<HTMLVideoElement | null>, rafRef:
 
 function formatDate(value: string) {
   return new Date(value).toLocaleString('ko-KR');
+}
+
+function createHistoryId() {
+  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+    return crypto.randomUUID();
+  }
+
+  return `hist_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
