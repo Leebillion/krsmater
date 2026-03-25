@@ -1,5 +1,5 @@
 {
-  "name": "Product Master Import",
-  "description": "A premium inventory management tool for importing product master data with real-time progress tracking and history.",
+  "name": "KRS Master",
+  "description": "KRS Master is a product master upload, search, and barcode matching web app.",
   "requestFramePermissions": []
 }

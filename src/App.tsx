@@ -31,6 +31,7 @@ type ViewMode = 'dashboard' | 'search' | 'scanner' | 'import';
 type ScanStatus = 'idle' | 'starting' | 'active' | 'unsupported' | 'denied' | 'error';
 type StorageStatus = 'idle' | 'loading' | 'loaded' | 'saving' | 'error';
 type DetectorResult = { rawValue?: string };
+type ScannerControls = { stop: () => void };
 type BarcodeDetectorCtor = new (options?: { formats?: string[] }) => {
   detect: (source: CanvasImageSource) => Promise<DetectorResult[]>;
 };
@@ -67,6 +68,7 @@ export default function App() {
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const scanControlsRef = useRef<ScannerControls | null>(null);
 
   const activeInput = view === 'scanner' ? scanInput : query;
   const matches = useMemo(() => findBarcodeMatches(records, activeInput), [records, activeInput]);
@@ -79,6 +81,7 @@ export default function App() {
     const hydrate = async () => {
       setStorageStatus('loading');
       setStorageMessage('저장된 마스터를 확인하고 있습니다.');
+
       try {
         const persisted = await loadPersistedState();
         if (cancelled) return;
@@ -109,81 +112,135 @@ export default function App() {
 
   useEffect(() => {
     if (!scannerEnabled || view !== 'scanner') {
-      stopScanner(videoRef, rafRef, streamRef);
+      stopScanner(videoRef, rafRef, streamRef, scanControlsRef);
       return;
     }
 
     let cancelled = false;
 
-    const start = async () => {
-      if (!window.BarcodeDetector) {
-        setScanStatus('unsupported');
-        setScanError('이 브라우저는 실시간 카메라 바코드 인식을 지원하지 않습니다. 아래 입력창으로도 검색할 수 있습니다.');
+    const startNativeScanner = async () => {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: { ideal: 'environment' } },
+        audio: false,
+      });
+
+      if (cancelled) {
+        stream.getTracks().forEach((track) => track.stop());
         return;
       }
 
-      try {
-        setScanStatus('starting');
-        setScanError(null);
-        const stream = await navigator.mediaDevices.getUserMedia({
-          video: { facingMode: { ideal: 'environment' } },
-          audio: false,
-        });
+      streamRef.current = stream;
+      if (!videoRef.current) return;
 
-        if (cancelled) {
-          stream.getTracks().forEach((track) => track.stop());
-          return;
-        }
+      videoRef.current.srcObject = stream;
+      await videoRef.current.play();
+      setScanStatus('active');
 
-        streamRef.current = stream;
-        if (!videoRef.current) return;
-        videoRef.current.srcObject = stream;
-        await videoRef.current.play();
-        setScanStatus('active');
+      const detector = new window.BarcodeDetector!({
+        formats: ['qr_code', 'ean_13', 'upc_a', 'upc_e', 'code_128', 'code_39'],
+      });
 
-        const detector = new window.BarcodeDetector({
-          formats: ['qr_code', 'ean_13', 'upc_a', 'upc_e', 'code_128', 'code_39'],
-        });
+      const tick = async () => {
+        if (cancelled || !videoRef.current) return;
 
-        const tick = async () => {
-          if (cancelled || !videoRef.current) return;
-          if (videoRef.current.readyState >= 2) {
-            try {
-              const found = await detector.detect(videoRef.current);
-              const raw = found[0]?.rawValue?.trim();
-              if (raw) {
-                setLastScanRaw(raw);
-                setScanInput(raw);
-              }
-            } catch {
-              setScanError('프레임 분석에 실패했습니다. 수동 입력으로도 매칭할 수 있습니다.');
+        if (videoRef.current.readyState >= 2) {
+          try {
+            const found = await detector.detect(videoRef.current);
+            const raw = found[0]?.rawValue?.trim();
+            if (raw) {
+              setLastScanRaw(raw);
+              setScanInput(raw);
             }
+          } catch {
+            setScanError('카메라 프레임 분석에 실패했습니다. 수동 입력으로도 매칭할 수 있습니다.');
           }
-
-          rafRef.current = requestAnimationFrame(() => {
-            void tick();
-          });
-        };
+        }
 
         rafRef.current = requestAnimationFrame(() => {
           void tick();
         });
+      };
+
+      rafRef.current = requestAnimationFrame(() => {
+        void tick();
+      });
+    };
+
+    const startFallbackScanner = async () => {
+      const { BrowserMultiFormatReader } = await import('@zxing/browser');
+      if (cancelled || !videoRef.current) return;
+
+      const reader = new BrowserMultiFormatReader();
+      const controls = await reader.decodeFromVideoDevice(undefined, videoRef.current, (result, error) => {
+        if (result) {
+          const raw = result.getText().trim();
+          if (raw) {
+            setLastScanRaw(raw);
+            setScanInput(raw);
+          }
+          return;
+        }
+
+        if (error && error.name !== 'NotFoundException') {
+          setScanError('호환 모드 스캐너가 프레임을 해석하지 못했습니다. 조명을 밝게 하거나 수동 입력을 사용해 주세요.');
+        }
+      });
+
+      if (cancelled) {
+        controls.stop();
+        return;
+      }
+
+      scanControlsRef.current = {
+        stop: () => {
+          controls.stop();
+        },
+      };
+
+      const attachedStream = videoRef.current.srcObject;
+      if (attachedStream instanceof MediaStream) {
+        streamRef.current = attachedStream;
+      }
+
+      setScanStatus('active');
+      setScanError('BarcodeDetector 미지원 브라우저라 호환 모드로 스캔 중입니다.');
+    };
+
+    const start = async () => {
+      try {
+        setScanStatus('starting');
+        setScanError(null);
+
+        if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+          setScanStatus('unsupported');
+          setScanError('이 환경에서는 카메라 접근이 막혀 있습니다. iPhone에서는 HTTPS 주소로 접속해야 카메라 스캔이 동작합니다.');
+          return;
+        }
+
+        if (window.BarcodeDetector) {
+          await startNativeScanner();
+          return;
+        }
+
+        await startFallbackScanner();
       } catch (error) {
         if (cancelled) return;
+
         if (error instanceof DOMException && error.name === 'NotAllowedError') {
           setScanStatus('denied');
           setScanError('카메라 권한이 필요합니다. 권한을 허용하거나 스캔값을 직접 입력해 주세요.');
-        } else {
-          setScanStatus('error');
-          setScanError('카메라를 시작하지 못했습니다. 다른 앱 사용 여부를 확인해 주세요.');
+          return;
         }
+
+        setScanStatus('error');
+        setScanError('카메라를 시작하지 못했습니다. iPhone에서는 HTTPS 접속 여부와 카메라 권한을 함께 확인해 주세요.');
       }
     };
 
     void start();
     return () => {
       cancelled = true;
-      stopScanner(videoRef, rafRef, streamRef);
+      stopScanner(videoRef, rafRef, streamRef, scanControlsRef);
     };
   }, [scannerEnabled, view]);
 
@@ -292,6 +349,7 @@ export default function App() {
       <main className="mx-auto grid max-w-7xl grid-cols-1 gap-8 px-6 pt-24 xl:grid-cols-[minmax(0,1.3fr)_24rem]">
         <div className="space-y-8">
           <StorageBanner status={storageStatus} message={storageMessage} />
+
           <section className="grid grid-cols-1 gap-4 md:grid-cols-3">
             {stats.map((item) => (
               <div key={item.label} className="rounded-[1.75rem] bg-white/85 p-5 shadow-[0_10px_40px_rgba(0,37,66,0.07)] backdrop-blur">
@@ -301,24 +359,62 @@ export default function App() {
             ))}
           </section>
 
-          {view === 'dashboard' && <DashboardView summary={summary} onGoImport={() => setView('import')} onClearMaster={handleClearMaster} />}
-          {view === 'import' && <ImportView inputRef={inputRef} uploading={uploading} uploadMessage={uploadMessage} onChooseFile={() => inputRef.current?.click()} onFileSelected={async (event) => {
-            const file = event.target.files?.[0];
-            if (!file) return;
-            await handleFileUpload(file);
-            event.target.value = '';
-          }} />}
-          {view === 'search' && <SearchView query={query} setQuery={setQuery} exactMatch={exactMatch} similarMatches={similarMatches} />}
-          {view === 'scanner' && <ScannerView videoRef={videoRef} scannerEnabled={scannerEnabled} setScannerEnabled={setScannerEnabled} scanInput={scanInput} setScanInput={setScanInput} lastScanRaw={lastScanRaw} scanStatus={scanStatus} scanError={scanError} exactMatch={exactMatch} similarMatches={similarMatches} onClear={() => {
-            setScanInput('');
-            setLastScanRaw('');
-          }} />}
+          {view === 'dashboard' && (
+            <DashboardView summary={summary} onGoImport={() => setView('import')} onClearMaster={handleClearMaster} />
+          )}
+
+          {view === 'import' && (
+            <ImportView
+              inputRef={inputRef}
+              uploading={uploading}
+              uploadMessage={uploadMessage}
+              onChooseFile={() => inputRef.current?.click()}
+              onFileSelected={async (event) => {
+                const file = event.target.files?.[0];
+                if (!file) return;
+                await handleFileUpload(file);
+                event.target.value = '';
+              }}
+            />
+          )}
+
+          {view === 'search' && (
+            <SearchView query={query} setQuery={setQuery} exactMatch={exactMatch} similarMatches={similarMatches} />
+          )}
+
+          {view === 'scanner' && (
+            <ScannerView
+              videoRef={videoRef}
+              scannerEnabled={scannerEnabled}
+              setScannerEnabled={setScannerEnabled}
+              scanInput={scanInput}
+              setScanInput={setScanInput}
+              lastScanRaw={lastScanRaw}
+              scanStatus={scanStatus}
+              scanError={scanError}
+              exactMatch={exactMatch}
+              similarMatches={similarMatches}
+              onClear={() => {
+                setScanInput('');
+                setLastScanRaw('');
+              }}
+            />
+          )}
         </div>
 
         <aside className="space-y-6">
           <Panel title="최근 업로드" icon={<HistoryIcon className="h-5 w-5" />}>
-            {history.length === 0 ? <p className="text-sm text-[#5b6670]">아직 업로드 기록이 없습니다.</p> : history.map((item) => <div key={item.id}><ImportHistory item={item} /></div>)}
+            {history.length === 0 ? (
+              <p className="text-sm text-[#5b6670]">아직 업로드 기록이 없습니다.</p>
+            ) : (
+              history.map((item) => (
+                <div key={item.id}>
+                  <ImportHistory item={item} />
+                </div>
+              ))
+            )}
           </Panel>
+
           <Panel title="검색 팁" icon={<InfoIcon className="h-5 w-5" />}>
             <div className="space-y-3 text-sm leading-6 text-[#43474d]">
               <p>QR 안에 URL이 들어 있어도 숫자 시퀀스를 뽑아 현재 마스터와 비교합니다.</p>
@@ -340,23 +436,45 @@ export default function App() {
   );
 }
 
-function DashboardView({ summary, onGoImport, onClearMaster }: { summary: MasterFileSummary | null; onGoImport: () => void; onClearMaster: () => void }) {
+function DashboardView({
+  summary,
+  onGoImport,
+  onClearMaster,
+}: {
+  summary: MasterFileSummary | null;
+  onGoImport: () => void;
+  onClearMaster: () => void;
+}) {
   return (
     <section className="grid grid-cols-1 gap-6 lg:grid-cols-2">
       <Panel title="현재 마스터 상태" icon={<InventoryIcon className="h-5 w-5" />}>
-        {summary ? <div className="space-y-4">
-          <MetricRow label="파일명" value={summary.fileName} />
-          <MetricRow label="총 레코드" value={`${summary.recordCount.toLocaleString()}건`} />
-          <MetricRow label="정상 폭" value={`${summary.fixedWidthRows.toLocaleString()}건`} />
-          <MetricRow label="예외 폭" value={`${summary.irregularRows.toLocaleString()}건`} />
-          <MetricRow label="인코딩" value={summary.encodingLabel} />
-          <MetricRow label="업로드 시각" value={formatDate(summary.importedAt)} />
-          <div className="flex flex-wrap gap-3 pt-4">
-            <button onClick={onGoImport} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white">새 마스터 업로드</button>
-            <button onClick={onClearMaster} className="rounded-2xl bg-[#edf4fb] px-5 py-3 font-semibold text-[#002542]">저장된 마스터 삭제</button>
+        {summary ? (
+          <div className="space-y-4">
+            <MetricRow label="파일명" value={summary.fileName} />
+            <MetricRow label="총 레코드" value={`${summary.recordCount.toLocaleString()}건`} />
+            <MetricRow label="정상 폭" value={`${summary.fixedWidthRows.toLocaleString()}건`} />
+            <MetricRow label="예외 폭" value={`${summary.irregularRows.toLocaleString()}건`} />
+            <MetricRow label="인코딩" value={summary.encodingLabel} />
+            <MetricRow label="업로드 시각" value={formatDate(summary.importedAt)} />
+            <div className="flex flex-wrap gap-3 pt-4">
+              <button onClick={onGoImport} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white">
+                새 마스터 업로드
+              </button>
+              <button onClick={onClearMaster} className="rounded-2xl bg-[#edf4fb] px-5 py-3 font-semibold text-[#002542]">
+                저장된 마스터 삭제
+              </button>
+            </div>
           </div>
-        </div> : <EmptyState title="마스터 파일이 없습니다" description="TXT 파일 업로드 후 바로 검색과 스캔 매칭을 시작할 수 있습니다." actionLabel="파일 업로드" onAction={onGoImport} />}
+        ) : (
+          <EmptyState
+            title="마스터 파일이 없습니다"
+            description="TXT 파일 업로드 후 바로 검색과 스캔 매칭을 시작할 수 있습니다."
+            actionLabel="파일 업로드"
+            onAction={onGoImport}
+          />
+        )}
       </Panel>
+
       <Panel title="매칭 방식" icon={<InfoIcon className="h-5 w-5" />}>
         <div className="space-y-4 text-sm leading-6 text-[#43474d]">
           <p>스캔값에서 숫자를 먼저 추출하고, 현재 마스터의 바코드와 유사도 점수를 계산합니다.</p>
@@ -368,32 +486,50 @@ function DashboardView({ summary, onGoImport, onClearMaster }: { summary: Master
   );
 }
 
-function ImportView({ inputRef, uploading, uploadMessage, onChooseFile, onFileSelected }: { inputRef: React.RefObject<HTMLInputElement | null>; uploading: boolean; uploadMessage: string | null; onChooseFile: () => void; onFileSelected: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>; }) {
+function ImportView({
+  inputRef,
+  uploading,
+  uploadMessage,
+  onChooseFile,
+  onFileSelected,
+}: {
+  inputRef: React.RefObject<HTMLInputElement | null>;
+  uploading: boolean;
+  uploadMessage: string | null;
+  onChooseFile: () => void;
+  onFileSelected: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
+}) {
   return (
     <section className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
       <Panel title="상품 마스터 업로드" icon={<UploadIcon className="h-5 w-5" />}>
         <input ref={inputRef} type="file" accept=".txt,.dat,.mst,.csv,text/plain,text/csv" className="hidden" onChange={onFileSelected} />
         <button onClick={onChooseFile} className="group flex min-h-[320px] w-full flex-col items-center justify-center rounded-[2rem] border-2 border-dashed border-[#9eb3c7] bg-[#f0f4f8] p-8 transition-colors hover:bg-[#e7f0fb]">
-          <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-white shadow-sm transition-transform duration-200 group-hover:scale-110"><UploadIcon className="h-10 w-10 text-[#002542]" /></div>
+          <div className="mb-6 flex h-20 w-20 items-center justify-center rounded-full bg-white shadow-sm transition-transform duration-200 group-hover:scale-110">
+            <UploadIcon className="h-10 w-10 text-[#002542]" />
+          </div>
           <h2 className="mb-2 text-xl font-bold tracking-tight text-[#171c1f]">TXT 마스터 파일 업로드</h2>
           <p className="mb-8 text-center text-sm leading-6 text-[#43474d]">CP949 고정폭 파일을 읽어서 상품명, 축약명, 바코드를 검색 가능한 인덱스로 만듭니다.</p>
           <span className="rounded-xl bg-gradient-to-r from-[#002542] to-[#1b3b5a] px-8 py-3 font-bold text-white shadow-lg">파일 선택하기</span>
         </button>
+
         <AnimatePresence>
-          {(uploading || uploadMessage) && <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} className="mt-5 rounded-[1.5rem] border border-[#efe4c8] bg-[#fffdf8] p-5">
-            <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <DescriptionIcon className="h-5 w-5 text-[#002542]" />
-                <div>
-                  <p className="font-semibold text-[#171c1f]">{uploading ? '파일 분석 중' : '업로드 결과'}</p>
-                  <p className="text-sm text-[#5b6670]">{uploadMessage ?? '파일을 파싱하고 있습니다.'}</p>
+          {(uploading || uploadMessage) && (
+            <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }} exit={{ opacity: 0, y: -8 }} className="mt-5 rounded-[1.5rem] border border-[#efe4c8] bg-[#fffdf8] p-5">
+              <div className="flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  <DescriptionIcon className="h-5 w-5 text-[#002542]" />
+                  <div>
+                    <p className="font-semibold text-[#171c1f]">{uploading ? '파일 분석 중' : '업로드 결과'}</p>
+                    <p className="text-sm text-[#5b6670]">{uploadMessage ?? '파일을 파싱하고 있습니다.'}</p>
+                  </div>
                 </div>
+                <span className={`rounded-full px-3 py-1 text-xs font-bold ${uploading ? 'bg-[#d1e4ff] text-[#002542]' : 'bg-[#dff3e3] text-[#005c29]'}`}>{uploading ? '진행 중' : '완료'}</span>
               </div>
-              <span className={`rounded-full px-3 py-1 text-xs font-bold ${uploading ? 'bg-[#d1e4ff] text-[#002542]' : 'bg-[#dff3e3] text-[#005c29]'}`}>{uploading ? '진행 중' : '완료'}</span>
-            </div>
-          </motion.div>}
+            </motion.div>
+          )}
         </AnimatePresence>
       </Panel>
+
       <Panel title="업로드 양식" icon={<InfoIcon className="h-5 w-5" />}>
         <div className="space-y-5 text-sm leading-6 text-[#43474d]">
           <MetricRow label="바코드" value="13바이트" />
@@ -408,7 +544,17 @@ function ImportView({ inputRef, uploading, uploadMessage, onChooseFile, onFileSe
   );
 }
 
-function SearchView({ query, setQuery, exactMatch, similarMatches }: { query: string; setQuery: React.Dispatch<React.SetStateAction<string>>; exactMatch?: BarcodeMatch; similarMatches: BarcodeMatch[]; }) {
+function SearchView({
+  query,
+  setQuery,
+  exactMatch,
+  similarMatches,
+}: {
+  query: string;
+  setQuery: React.Dispatch<React.SetStateAction<string>>;
+  exactMatch?: BarcodeMatch;
+  similarMatches: BarcodeMatch[];
+}) {
   return (
     <section className="space-y-6">
       <Panel title="바코드 검색" icon={<SearchIcon className="h-5 w-5" />}>
@@ -423,7 +569,19 @@ function SearchView({ query, setQuery, exactMatch, similarMatches }: { query: st
   );
 }
 
-function ScannerView(props: { videoRef: React.RefObject<HTMLVideoElement | null>; scannerEnabled: boolean; setScannerEnabled: React.Dispatch<React.SetStateAction<boolean>>; scanInput: string; setScanInput: React.Dispatch<React.SetStateAction<string>>; lastScanRaw: string; scanStatus: ScanStatus; scanError: string | null; exactMatch?: BarcodeMatch; similarMatches: BarcodeMatch[]; onClear: () => void; }) {
+function ScannerView(props: {
+  videoRef: React.RefObject<HTMLVideoElement | null>;
+  scannerEnabled: boolean;
+  setScannerEnabled: React.Dispatch<React.SetStateAction<boolean>>;
+  scanInput: string;
+  setScanInput: React.Dispatch<React.SetStateAction<string>>;
+  lastScanRaw: string;
+  scanStatus: ScanStatus;
+  scanError: string | null;
+  exactMatch?: BarcodeMatch;
+  similarMatches: BarcodeMatch[];
+  onClear: () => void;
+}) {
   return (
     <section className="space-y-6">
       <Panel title="QR / 바코드 스캐너" icon={<ScannerIcon className="h-5 w-5" />}>
@@ -438,10 +596,17 @@ function ScannerView(props: { videoRef: React.RefObject<HTMLVideoElement | null>
               <button onClick={props.onClear} className="rounded-2xl bg-[#edf4fb] px-5 py-3 font-semibold text-[#002542]">스캔 초기화</button>
             </div>
           </div>
+
           <div className="space-y-4">
             <StatusCard scanStatus={props.scanStatus} scanError={props.scanError} />
-            <div className="rounded-[1.75rem] border border-[#dce6f0] bg-[#f8fbfd] p-5"><p className="text-sm text-[#5b6670]">최근 스캔 원문</p><p className="mt-2 break-all font-mono text-[#002542]">{props.lastScanRaw || '-'}</p></div>
-            <div className="rounded-[1.75rem] border border-[#dce6f0] bg-[#f8fbfd] p-5"><label className="text-sm text-[#5b6670]">직접 입력 / 보정</label><input value={props.scanInput} onChange={(event) => props.setScanInput(event.target.value)} placeholder="스캔값을 직접 붙여 넣어도 됩니다" className="mt-3 w-full rounded-2xl border border-[#d6e0ea] bg-white px-4 py-3 text-base outline-none focus:border-[#5f9ad5]" /></div>
+            <div className="rounded-[1.75rem] border border-[#dce6f0] bg-[#f8fbfd] p-5">
+              <p className="text-sm text-[#5b6670]">최근 스캔 원문</p>
+              <p className="mt-2 break-all font-mono text-[#002542]">{props.lastScanRaw || '-'}</p>
+            </div>
+            <div className="rounded-[1.75rem] border border-[#dce6f0] bg-[#f8fbfd] p-5">
+              <label className="text-sm text-[#5b6670]">직접 입력 / 보정</label>
+              <input value={props.scanInput} onChange={(event) => props.setScanInput(event.target.value)} placeholder="스캔값을 직접 붙여 넣어도 됩니다" className="mt-3 w-full rounded-2xl border border-[#d6e0ea] bg-white px-4 py-3 text-base outline-none focus:border-[#5f9ad5]" />
+            </div>
           </div>
         </div>
       </Panel>
@@ -450,8 +615,11 @@ function ScannerView(props: { videoRef: React.RefObject<HTMLVideoElement | null>
   );
 }
 
-function MatchSection({ exactMatch, similarMatches, emptyMessage }: { exactMatch?: BarcodeMatch; similarMatches: BarcodeMatch[]; emptyMessage: string; }) {
-  if (!exactMatch && similarMatches.length === 0) return <Panel title="매칭 결과" icon={<SearchIcon className="h-5 w-5" />}><p className="text-sm text-[#5b6670]">{emptyMessage}</p></Panel>;
+function MatchSection({ exactMatch, similarMatches, emptyMessage }: { exactMatch?: BarcodeMatch; similarMatches: BarcodeMatch[]; emptyMessage: string }) {
+  if (!exactMatch && similarMatches.length === 0) {
+    return <Panel title="매칭 결과" icon={<SearchIcon className="h-5 w-5" />}><p className="text-sm text-[#5b6670]">{emptyMessage}</p></Panel>;
+  }
+
   return (
     <section className="space-y-6">
       {exactMatch && <Panel title="완전 일치" icon={<CheckCircleIcon className="h-5 w-5" />}><MatchCard match={exactMatch} emphasize /></Panel>}
@@ -490,7 +658,7 @@ function MetricRow({ label, value }: { label: string; value: string }) {
   return <div className="flex items-center justify-between gap-3 border-b border-[#edf2f7] py-3 last:border-b-0"><span className="text-sm text-[#5b6670]">{label}</span><span className="text-right font-semibold text-[#171c1f]">{value}</span></div>;
 }
 
-function EmptyState({ title, description, actionLabel, onAction }: { title: string; description: string; actionLabel: string; onAction: () => void; }) {
+function EmptyState({ title, description, actionLabel, onAction }: { title: string; description: string; actionLabel: string; onAction: () => void }) {
   return <div className="rounded-[1.75rem] border border-[#dae5ef] bg-[#f5f9fc] p-6"><p className="text-lg font-bold text-[#171c1f]">{title}</p><p className="mt-2 text-sm leading-6 text-[#5b6670]">{description}</p><button onClick={onAction} className="mt-5 rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white">{actionLabel}</button></div>;
 }
 
@@ -524,10 +692,19 @@ function NavItem({ icon, label, active = false }: { icon: React.ReactNode; label
   return <div className={`flex flex-col items-center justify-center px-3 py-1 transition-all ${active ? 'rounded-2xl bg-[#d1e4ff] text-[#002542]' : 'text-[#43474d]'}`}><div className="flex h-6 w-6 items-center justify-center">{icon}</div><span className="mt-1 text-[10px] font-bold tracking-wider">{label}</span></div>;
 }
 
-function stopScanner(videoRef: React.RefObject<HTMLVideoElement | null>, rafRef: React.RefObject<number | null>, streamRef: React.RefObject<MediaStream | null>) {
+function stopScanner(
+  videoRef: React.RefObject<HTMLVideoElement | null>,
+  rafRef: React.RefObject<number | null>,
+  streamRef: React.RefObject<MediaStream | null>,
+  scanControlsRef: React.RefObject<ScannerControls | null>,
+) {
   if (rafRef.current !== null) {
     cancelAnimationFrame(rafRef.current);
     rafRef.current = null;
+  }
+  if (scanControlsRef.current) {
+    scanControlsRef.current.stop();
+    scanControlsRef.current = null;
   }
   if (streamRef.current) {
     streamRef.current.getTracks().forEach((track) => track.stop());
@@ -547,6 +724,5 @@ function createHistoryId() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
     return crypto.randomUUID();
   }
-
   return `hist_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
 }
