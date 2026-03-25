@@ -12,6 +12,7 @@ export type MasterFileSummary = {
   fixedWidthRows: number;
   irregularRows: number;
   encodingLabel: string;
+  importedAt: string;
 };
 
 export type BarcodeMatch = {
@@ -72,6 +73,7 @@ export async function parseMasterFile(file: File): Promise<{ records: MasterReco
       fixedWidthRows,
       irregularRows,
       encodingLabel: 'CP949 (EUC-KR)',
+      importedAt: new Date().toISOString(),
     },
   };
 }
@@ -95,7 +97,7 @@ export function findBarcodeMatches(records: MasterRecord[], rawInput: string): B
     ) {
       bestScore = 0.74;
       bestType = 'text';
-      reasons = ['상품명/축약명 일치'];
+      reasons = ['상품명 또는 축약명 일치'];
     }
 
     for (const candidate of barcodeCandidates) {
