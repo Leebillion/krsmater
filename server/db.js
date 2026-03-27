@@ -37,6 +37,41 @@ export function initializeDb() {
     `CREATE INDEX IF NOT EXISTS idx_master_records_name ON master_records(name)`,
     `CREATE INDEX IF NOT EXISTS idx_master_records_short_name ON master_records(short_name)`,
     `CREATE INDEX IF NOT EXISTS idx_master_records_file_id ON master_records(file_id)`,
+    `CREATE TABLE IF NOT EXISTS bundle_reports (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      bundle_name TEXT NOT NULL,
+      bundle_barcode TEXT NOT NULL,
+      quantity INTEGER NOT NULL,
+      item_barcode TEXT NOT NULL,
+      item_name TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_bundle_reports_bundle_barcode ON bundle_reports(bundle_barcode)`,
+    `CREATE INDEX IF NOT EXISTS idx_bundle_reports_item_barcode ON bundle_reports(item_barcode)`,
+    `CREATE INDEX IF NOT EXISTS idx_bundle_reports_bundle_name ON bundle_reports(bundle_name)`,
+    `CREATE TABLE IF NOT EXISTS bundle_master_files (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      file_name TEXT NOT NULL,
+      imported_at TEXT NOT NULL,
+      record_count INTEGER NOT NULL,
+      is_active INTEGER NOT NULL DEFAULT 0
+    )`,
+    `CREATE TABLE IF NOT EXISTS bundle_master_records (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      file_id INTEGER NOT NULL,
+      bundle_name TEXT NOT NULL,
+      bundle_barcode TEXT NOT NULL,
+      quantity INTEGER NOT NULL,
+      item_barcode TEXT NOT NULL,
+      item_name TEXT NOT NULL,
+      row_number INTEGER NOT NULL,
+      FOREIGN KEY(file_id) REFERENCES bundle_master_files(id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_bundle_master_bundle_barcode ON bundle_master_records(bundle_barcode)`,
+    `CREATE INDEX IF NOT EXISTS idx_bundle_master_item_barcode ON bundle_master_records(item_barcode)`,
+    `CREATE INDEX IF NOT EXISTS idx_bundle_master_bundle_name ON bundle_master_records(bundle_name)`,
+    `CREATE INDEX IF NOT EXISTS idx_bundle_master_item_name ON bundle_master_records(item_name)`,
+    `CREATE INDEX IF NOT EXISTS idx_bundle_master_file_id ON bundle_master_records(file_id)`,
   ]);
 }
 
@@ -92,7 +127,7 @@ export function getActiveMasterSummary() {
   );
 }
 
-export async function getActiveMasterRecords() {
+export function getActiveMasterRecords() {
   return all(
     `SELECT r.barcode, r.name, r.short_name as shortName, r.line_number as lineNumber, r.raw_line as rawLine
      FROM master_records r
@@ -113,6 +148,154 @@ export function searchActiveRecords(query) {
      ORDER BY CASE WHEN r.barcode = ? THEN 0 ELSE 1 END, r.line_number ASC
      LIMIT 50`,
     [like, like, like, query],
+  );
+}
+
+export function createBundleReport(payload) {
+  const createdAt = getKstTimestamp();
+  return run(
+    `INSERT INTO bundle_reports (bundle_name, bundle_barcode, quantity, item_barcode, item_name, created_at)
+     VALUES (?, ?, ?, ?, ?, ?)`,
+    [payload.bundleName, payload.bundleBarcode, payload.quantity, payload.itemBarcode, payload.itemName, createdAt],
+  ).then((result) => ({
+    id: result.lastID,
+    createdAt,
+  }));
+}
+
+export function listBundleReports() {
+  return all(
+    `SELECT id,
+            bundle_name as bundleName,
+            bundle_barcode as bundleBarcode,
+            quantity,
+            item_barcode as itemBarcode,
+            item_name as itemName,
+            created_at as createdAt
+     FROM bundle_reports
+     ORDER BY id DESC`,
+  );
+}
+
+export function updateBundleReport(id, payload) {
+  return run(
+    `UPDATE bundle_reports
+     SET bundle_name = ?,
+         bundle_barcode = ?,
+         quantity = ?,
+         item_barcode = ?,
+         item_name = ?
+     WHERE id = ?`,
+    [payload.bundleName, payload.bundleBarcode, payload.quantity, payload.itemBarcode, payload.itemName, id],
+  );
+}
+
+export function deleteBundleReport(id) {
+  return run('DELETE FROM bundle_reports WHERE id = ?', [id]);
+}
+
+export async function replaceBundleMaster({ fileName, records }) {
+  const importedAt = new Date().toISOString();
+  await run('BEGIN TRANSACTION');
+
+  try {
+    await run('UPDATE bundle_master_files SET is_active = 0');
+    const insertResult = await run(
+      `INSERT INTO bundle_master_files (file_name, imported_at, record_count, is_active)
+       VALUES (?, ?, ?, 1)`,
+      [fileName, importedAt, records.length],
+    );
+
+    const fileId = insertResult.lastID;
+    await run('DELETE FROM bundle_master_records WHERE file_id NOT IN (SELECT id FROM bundle_master_files WHERE is_active = 1)');
+
+    const stmt = await prepare(
+      `INSERT INTO bundle_master_records (file_id, bundle_name, bundle_barcode, quantity, item_barcode, item_name, row_number)
+       VALUES (?, ?, ?, ?, ?, ?, ?)`,
+    );
+
+    for (const record of records) {
+      await stmtRun(stmt, [
+        fileId,
+        record.bundleName,
+        record.bundleBarcode,
+        record.quantity,
+        record.itemBarcode,
+        record.itemName,
+        record.rowNumber,
+      ]);
+    }
+
+    await finalize(stmt);
+    await run('COMMIT');
+
+    return {
+      fileId,
+      summary: {
+        fileName,
+        importedAt,
+        recordCount: records.length,
+      },
+    };
+  } catch (error) {
+    await run('ROLLBACK');
+    throw error;
+  }
+}
+
+export function getBundleMasterSummary() {
+  return get(
+    `SELECT id, file_name as fileName, imported_at as importedAt, record_count as recordCount
+     FROM bundle_master_files
+     WHERE is_active = 1
+     ORDER BY id DESC
+     LIMIT 1`,
+  );
+}
+
+export function searchBundleMasterRecords(query = '') {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return all(
+      `SELECT bundle_name as bundleName,
+              bundle_barcode as bundleBarcode,
+              quantity,
+              item_barcode as itemBarcode,
+              item_name as itemName,
+              row_number as rowNumber
+       FROM bundle_master_records r
+       JOIN bundle_master_files f ON f.id = r.file_id
+       WHERE f.is_active = 1
+       ORDER BY row_number ASC
+       LIMIT 200`,
+    );
+  }
+
+  const like = `%${trimmed}%`;
+  return all(
+    `SELECT bundle_name as bundleName,
+            bundle_barcode as bundleBarcode,
+            quantity,
+            item_barcode as itemBarcode,
+            item_name as itemName,
+            row_number as rowNumber
+     FROM bundle_master_records r
+     JOIN bundle_master_files f ON f.id = r.file_id
+     WHERE f.is_active = 1
+       AND (
+         bundle_name LIKE ?
+         OR bundle_barcode LIKE ?
+         OR item_barcode LIKE ?
+         OR item_name LIKE ?
+       )
+     ORDER BY CASE
+         WHEN bundle_barcode = ? THEN 0
+         WHEN item_barcode = ? THEN 1
+         ELSE 2
+       END,
+       row_number ASC
+     LIMIT 200`,
+    [like, like, like, like, trimmed, trimmed],
   );
 }
 
@@ -179,4 +362,8 @@ function finalize(stmt) {
       else resolve();
     });
   });
+}
+
+function getKstTimestamp() {
+  return new Date(Date.now() + 9 * 60 * 60 * 1000).toISOString().replace('Z', '+09:00');
 }

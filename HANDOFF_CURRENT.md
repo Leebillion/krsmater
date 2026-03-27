@@ -1,185 +1,127 @@
 # KRS Master Handoff
 
 ## Current Summary
-KRS Master is now in a partially production-ready state with:
+KRS Master now includes:
 
-- frontend app implemented in Vite + React
-- local IndexedDB persistence
-- shared server-side master storage foundation
-- Express API server
-- SQLite DB storage
-- barcode rendering in search results
-- QR/barcode scanner with native `BarcodeDetector` and ZXing fallback path
+- shared server-side master sync with Express + SQLite
+- local browser cache restore on startup
+- scanner / search / bundle / upload bottom navigation
+- compact top status badges under the `KRS Master` title
+- bundle reporting, bundle report status management, and bundle master search flows
 
-## Git Status
-Latest confirmed pushed commit before any new uncommitted local changes:
+## Current Working Areas
 
-- `e1f5d90`
-- `Add shared master API and client sync foundation`
+### 1. Product Master
+- server APIs for active master upload, full sync, search, and matching are in place
+- app restores local IndexedDB data, then syncs newer server master automatically
+- header message now shows `서버 마스터 동기화 완료` when server sync wins
 
-There are additional local modifications after that for better upload error handling:
+### 2. Bundle Menu
+Bundle menu order and tabs are currently:
 
+- `번들 제보`
+- `번들 제보 상황`
+- `번들 검색`
+
+Implemented behavior:
+
+- bundle report save to SQLite
+- bundle report DB Excel download
+- bundle report status list / edit / delete
+- bundle master Excel upload
+- bundle master search by product name or barcode
+
+### 3. Bundle Input / Validation
+- bundle report field limits are enforced at input time
+- barcode fields allow `1~13` digits, including leading `0`
+- name fields are limited to `30byte`
+- quantity is limited to `2` digits
+
+### 4. Bundle Master Upload Rules
+Current upload behavior:
+
+- first row is treated as header
+- empty rows are skipped with warning messages
+- duplicate bundle barcode warns and keeps the later row
+- duplicate item barcode warns and continues
+- bundle master search no longer supports full-list load by default; search term is required
+
+Accepted headers include practical variants such as:
+
+- `번들바코드`
+- `번들상품명`
+- `입수`
+- `상품코드`
+- `상품명`
+
+## Recent Fixes
+
+### Bundle Report Status
+- added `GET /api/bundles/report`
+- added `PUT /api/bundles/report/:id`
+- added `DELETE /api/bundles/report/:id`
+- bundle report status tab now loads saved reports and supports inline correction
+
+### Runtime Issue Found And Fixed
+Observed issue:
+
+- `번들 제보 상황` showed `제보 목록을 불러오지 못했다` style error
+
+Root cause:
+
+- local API server process was still running an older build that did not expose `GET /api/bundles/report`
+
+Fix:
+
+- restarted server with latest code
+- verified `GET /api/bundles/report` returns saved rows
+
+### Korea Time Save
+- new bundle report saves now store `createdAt` as KST offset format such as `+09:00`
+- older rows may still remain in previous UTC format
+
+## Main Files Updated In This Phase
+- `src/KrsMasterApp.tsx`
 - `src/lib/api.ts`
+- `src/components/Icons.tsx`
 - `server/index.js`
+- `server/db.js`
+- `package.json`
+- `package-lock.json`
 
-These were validated locally with:
+## Local Verification
+Confirmed locally:
 
 - `npm run lint`
 - `npm run build`
+- `node --check server/index.js`
+- `node --check server/db.js`
+- `GET /api/bundles/report`
+- `POST /api/bundles/report`
 
-## Important Current Operational Status
-User reported:
-
-- nginx upload size limit has been increased
-- HTTPS has been applied on the server
-
-This is important because:
-
-- large master upload should now bypass previous `413 Request Entity Too Large`
-- iPhone camera access should now be possible in secure context
-
-## Confirmed Root Cause of Recent Upload Failure
-Recent upload failure was not a parser failure.
-
-Actual cause:
-
-- nginx returned `413 Request Entity Too Large`
-
-Evidence:
-
-- browser devtools showed `413`
-- tested master file size was about 6.14 MB
-- Node `multer` limit is already set to 25 MB
-
-Conclusion:
-
-- request was blocked before reaching Express
-
-## Current Code Structure
-
-### Frontend
-- `src/KrsMasterApp.tsx`
-  New main app implementation
-- `src/App.tsx`
-  Re-export wrapper to `KrsMasterApp`
-- `src/lib/master.ts`
-  parsing + local similarity logic
-- `src/lib/persistence.ts`
-  IndexedDB storage
-- `src/lib/api.ts`
-  frontend API client for server sync
-- `src/components/BarcodePreview.tsx`
-  result barcode rendering
-
-### Backend
-- `server/index.js`
-  Express API entry
-- `server/db.js`
-  SQLite access layer
-- `server/masterParser.js`
-  server-side master parser + matching helper
-
-### Docs
-- `SERVICE_STATUS.md`
-- `TODO_NEXT.md`
-
-## API Endpoints Currently Added
-- `GET /api/health`
-- `GET /api/master/status`
-- `GET /api/master/full`
-- `POST /api/master/import`
-- `GET /api/search?q=...`
-- `GET /api/match?code=...`
-
-## Server/Data Notes
+## Current Data / Runtime Notes
 - SQLite DB path: `data/krsmaster.sqlite`
-- `data/` is gitignored
-- server creates DB automatically
+- `data/` stays untracked
+- running local API must be restarted after backend route changes
+- direct PowerShell `Invoke-WebRequest` with Korean JSON may show mojibake in console, but app/browser flow is normal when UTF-8 request path is used
 
-## Verified Local End-to-End Result
-Local API test with real file:
-
-- file: `pda 260323.txt`
-- imported rows: `105,906`
-- `/api/master/import` success
-- `/api/master/status` success
-- `/api/search` success
-- `/api/match` success
-
-## Current Remaining Work
-
-### 1. Production verification after nginx and HTTPS change
-Need to verify on real server:
-
-- upload now succeeds through nginx
-- API proxy works correctly
-- Node server is reachable behind nginx
-- SQLite file writes correctly on server
-
-### 2. iPhone real-device scanner verification
-Need to verify:
-
-- Safari
-- Chrome on iPhone
-- permission flow
-- native scanner path vs fallback path
-
-### 3. Frontend sync path final verification
-Need to confirm:
-
-- app startup loads local IndexedDB
-- app also syncs server master when newer
-- upload updates both server and local cache
-
-### 4. Clean up encoding/mojibake in old files if still present anywhere
-Some earlier source/history had broken Korean strings from encoding mismatch.
-Current active app file was rebuilt cleaner, but this should still be checked carefully in deployed UI.
-
-## Last Upload Error Improvement
-Not-yet-committed local improvement:
-
-- `src/lib/api.ts`
-  If response is `413`, frontend now throws a more specific error mentioning nginx upload size limit.
-- `server/index.js`
-  If `multer` hits its own size limit, server returns explicit `413`.
-
-Recommended next step:
-
-1. verify production upload now works
-2. if confirmed, commit and push these last two local changes
-
-## Recommended Immediate Test Checklist
-After server changes:
-
-1. open `https://master.mykrs.com`
-2. upload the real master file
-3. confirm dashboard shows imported counts
-4. open another device/browser
-5. confirm same master is searchable
-6. test `/api/health`
-7. test iPhone scanner
-8. test one real barcode exact match
-9. test one fuzzy/similar barcode case
+## Recommended Next Checks
+1. verify bundle report status list on actual deployed server
+2. normalize display of old UTC-saved bundle report times if needed
+3. consider adding search/filter inside `번들 제보 상황` when report count grows
+4. clean remaining mojibake strings in backend source messages when convenient
 
 ## Useful Commands
-Local:
 
 ```bash
-npm install
 npm run lint
 npm run build
 npm run server
 ```
 
-API quick checks:
+Quick API checks:
 
 ```bash
-curl https://master.mykrs.com/api/health
-curl https://master.mykrs.com/api/master/status
+curl http://localhost:3100/api/health
+curl http://localhost:3100/api/bundles/report
 ```
-
-## Notes To Next Worker
-- Do not commit `data/krsmaster.sqlite`
-- Check current `git status` before committing
-- Confirm whether production server already pulled commit `e1f5d90`
-- If production is now healthy, next likely action is small bugfix commit for the improved 413 error message and final deployment verification
