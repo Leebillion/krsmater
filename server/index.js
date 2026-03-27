@@ -88,6 +88,14 @@ app.get('/api/match', async (req, res, next) => {
 
 app.use((error, _req, res, _next) => {
   console.error(error);
+
+  if (error instanceof multer.MulterError && error.code === 'LIMIT_FILE_SIZE') {
+    res.status(413).json({
+      error: '업로드 파일이 서버 허용 용량을 초과했습니다.',
+    });
+    return;
+  }
+
   res.status(500).json({
     error: error instanceof Error ? error.message : 'Internal Server Error',
   });
