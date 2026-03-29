@@ -9,6 +9,7 @@ KRS Master currently includes:
 - bundle reporting, bundle report status management, and bundle master lookup
 - live QR/barcode scanner status overlay and result feedback
 - installable PWA shell with manifest and service worker registration
+- update-ready banner and local draft restore for safer refreshes
 
 ## Current Working Areas
 
@@ -18,11 +19,11 @@ KRS Master currently includes:
 - local cache is still used for fast startup and offline-tolerant behavior
 
 ### 2. Scanner
-- scanner button labels are now `카메라 활성화`, `카메라 끄기`, and `재스캔`
+- scanner button labels are `카메라 활성화`, `카메라 끄기`, `재스캔`
 - while the camera is actively reading, the preview shows `스캔중`
 - after a successful read, the preview briefly shows `스캔성공`
 - both native `BarcodeDetector` and ZXing fallback paths update the same scan feedback state
-- camera startup now prefers rear camera, high resolution, and continuous focus hints
+- camera startup prefers rear camera, high resolution, and continuous focus hints
 - once enabled, scanner auto-reactivation is attempted on the next visit
 
 ### 3. PWA
@@ -30,6 +31,8 @@ KRS Master currently includes:
 - manifest and service worker are generated at build time
 - home screen installation is available with standalone launch
 - static assets are cached for faster revisit and more stable shell loading
+- when a new deployed version is ready, the app shows an update banner
+- search/scanner input and bundle forms are stored as local draft state and restored after refresh
 
 ### 4. Bundle Menu
 Bundle menu tabs are currently:
@@ -85,6 +88,8 @@ Accepted headers include practical variants such as:
 - added installable app manifest
 - added service worker registration for production builds
 - added app icons including Apple touch icon
+- added update-ready banner so users can apply a new deployed version intentionally
+- persisted in-progress UI drafts to reduce form loss during refresh/update
 
 ### Bundle Report Status
 - added `GET /api/bundles/report`
@@ -112,6 +117,7 @@ Fix:
 
 ## Main Files Updated In This Phase
 - `src/KrsMasterApp.tsx`
+- `src/main.tsx`
 - `src/lib/api.ts`
 - `src/components/Icons.tsx`
 - `server/index.js`
@@ -139,9 +145,10 @@ Confirmed locally:
 1. verify scanner focus/read speed on actual Galaxy S25 hardware
 2. verify iPhone Safari/Chrome behavior under valid HTTPS
 3. verify PWA install flow on Android and iPhone
-4. normalize display of old UTC-saved bundle report times if needed
-5. consider search/filter inside `번들 제보 상황` when report count grows
-6. clean remaining mojibake strings in source and docs when convenient
+4. verify update banner and draft restore behavior after a new deploy
+5. normalize display of old UTC-saved bundle report times if needed
+6. consider search/filter inside `번들 제보 상황` when report count grows
+7. clean remaining mojibake strings in source and docs when convenient
 
 ## Useful Commands
 

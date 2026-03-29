@@ -3,7 +3,7 @@
 ## Overview
 KRS Master is a web app for importing a product master file, syncing the active master through the server, searching products, scanning QR/barcodes, and matching scanned values to existing master barcodes even when they are not perfectly identical.
 
-It now also supports PWA installation with standalone launch behavior.
+It also supports PWA installation with standalone launch behavior.
 
 ## Current User Flow
 1. User opens the web app.
@@ -16,6 +16,7 @@ It now also supports PWA installation with standalone launch behavior.
 8. App shows exact matches first, then similar barcode candidates.
 9. Each result card also renders a barcode that can be scanned by another scanner.
 10. Installed users can relaunch the app from the home screen.
+11. If a new deployed version is ready, the app shows an update banner before refresh.
 
 ## Current Data Model
 Master file is treated as a fixed-width text file.
@@ -33,6 +34,7 @@ The parser currently tolerates irregular-width rows and counts them as exception
 Main files:
 
 - `src/KrsMasterApp.tsx`
+- `src/main.tsx`
 - `src/lib/master.ts`
 - `src/lib/persistence.ts`
 - `src/lib/api.ts`
@@ -46,11 +48,14 @@ Main files:
 - scanner flow
 - local restore and server sync coordination
 - scanner preference persistence
+- local draft persistence for in-progress form/input values
+- update/offline readiness banners
 
 ### `src/main.tsx` / `vite.config.ts`
 - service worker registration
 - manifest generation
 - installable PWA configuration
+- update-ready and offline-ready event bridging
 
 ### `src/lib/master.ts`
 - master file parsing
@@ -92,6 +97,12 @@ After import:
 - upload history is stored in IndexedDB
 - active master is uploaded to the server
 
+During normal use:
+
+- search/scanner input is stored locally as draft state
+- bundle report form and editing form are stored locally as draft state
+- draft state is restored after refresh or update
+
 After reload:
 
 - app hydrates from IndexedDB
@@ -118,6 +129,9 @@ Current behavior:
 - app can be installed from supported browsers
 - launch mode is `standalone`
 - static shell assets are cached for quicker revisit
+- app shows an update banner when a newer deployed version is ready
+- app shows an offline-ready banner after PWA caching is prepared
+- search/scanner input and bundle form drafts are restored after refresh
 
 ## Important Operational Note
 iPhone camera scanning still requires HTTPS.
@@ -155,3 +169,5 @@ Production artifact:
 - bundle report save / edit / delete
 - bundle master upload / lookup
 - installable PWA manifest and service worker
+- update-ready banner
+- local draft restore after refresh

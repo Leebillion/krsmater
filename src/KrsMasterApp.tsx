@@ -25,12 +25,23 @@ type BundleTab = 'report' | 'reportStatus' | 'lookup';
 type ScanStatus = 'idle' | 'starting' | 'active' | 'unsupported' | 'denied' | 'error';
 type ScanFeedback = 'idle' | 'scanning' | 'success';
 type StorageStatus = 'idle' | 'loading' | 'loaded' | 'saving' | 'error';
+type UpdateBannerState = 'hidden' | 'updateReady' | 'offlineReady';
 type DetectorResult = { rawValue?: string };
 type ScannerControls = {
   stop: () => void;
   streamVideoConstraintsApply?: (constraints: MediaTrackConstraints, trackFilter?: (track: MediaStreamTrack) => boolean) => Promise<void>;
 };
 type BarcodeDetectorCtor = new (options?: { formats?: string[] }) => { detect: (source: CanvasImageSource) => Promise<DetectorResult[]> };
+type AppDraftState = {
+  view: ViewMode;
+  bundleTab: BundleTab;
+  query: string;
+  scanInput: string;
+  bundleLookupQuery: string;
+  bundleForm: BundleReportInput;
+  editingReportId: number | null;
+  editingReportForm: BundleReportInput;
+};
 
 declare global {
   interface Window {
@@ -45,6 +56,7 @@ const navItems = [
   { id: 'import' as const, label: '업로드', icon: <UploadIcon fill /> },
 ];
 const scannerPreferenceKey = 'krs-master-scanner-enabled';
+const appDraftKey = 'krs-master-app-draft-v1';
 
 const emptyBundleForm: BundleReportInput = {
   bundleName: '',
@@ -52,6 +64,16 @@ const emptyBundleForm: BundleReportInput = {
   quantity: '',
   itemBarcode: '',
   itemName: '',
+};
+const emptyAppDraft: AppDraftState = {
+  view: 'scanner',
+  bundleTab: 'report',
+  query: '',
+  scanInput: '',
+  bundleLookupQuery: '',
+  bundleForm: emptyBundleForm,
+  editingReportId: null,
+  editingReportForm: emptyBundleForm,
 };
 
 export default function KrsMasterApp() {
@@ -70,6 +92,7 @@ export default function KrsMasterApp() {
   const [scanError, setScanError] = useState<string | null>(null);
   const [storageStatus, setStorageStatus] = useState<StorageStatus>('loading');
   const [storageMessage, setStorageMessage] = useState<string | null>('저장된 마스터와 서버 상태를 확인하고 있습니다.');
+  const [updateBanner, setUpdateBanner] = useState<UpdateBannerState>('hidden');
   const [bundleTab, setBundleTab] = useState<BundleTab>('report');
   const [bundleForm, setBundleForm] = useState<BundleReportInput>(emptyBundleForm);
   const [bundleReportBusy, setBundleReportBusy] = useState(false);
@@ -136,9 +159,50 @@ export default function KrsMasterApp() {
       if (window.localStorage.getItem(scannerPreferenceKey) === 'true') {
         setScannerEnabled(true);
       }
+      const storedDraft = window.localStorage.getItem(appDraftKey);
+      if (storedDraft) {
+        const draft = JSON.parse(storedDraft) as Partial<AppDraftState>;
+        if (draft.view === 'scanner' || draft.view === 'search' || draft.view === 'bundle' || draft.view === 'import') setView(draft.view);
+        if (draft.bundleTab === 'report' || draft.bundleTab === 'reportStatus' || draft.bundleTab === 'lookup') setBundleTab(draft.bundleTab);
+        if (typeof draft.query === 'string') setQuery(draft.query);
+        if (typeof draft.scanInput === 'string') setScanInput(draft.scanInput);
+        if (typeof draft.bundleLookupQuery === 'string') setBundleLookupQuery(draft.bundleLookupQuery);
+        if (draft.bundleForm) setBundleForm({ ...emptyBundleForm, ...draft.bundleForm });
+        if (typeof draft.editingReportId === 'number' || draft.editingReportId === null) setEditingReportId(draft.editingReportId);
+        if (draft.editingReportForm) setEditingReportForm({ ...emptyBundleForm, ...draft.editingReportForm });
+      }
     } catch {
       // Ignore preference restore failures.
     }
+  }, []);
+
+  useEffect(() => {
+    try {
+      const draft: AppDraftState = {
+        view,
+        bundleTab,
+        query,
+        scanInput,
+        bundleLookupQuery,
+        bundleForm,
+        editingReportId,
+        editingReportForm,
+      };
+      window.localStorage.setItem(appDraftKey, JSON.stringify(draft));
+    } catch {
+      // Ignore draft persistence failures.
+    }
+  }, [view, bundleTab, query, scanInput, bundleLookupQuery, bundleForm, editingReportId, editingReportForm]);
+
+  useEffect(() => {
+    const handleUpdateReady = () => setUpdateBanner('updateReady');
+    const handleOfflineReady = () => setUpdateBanner((prev) => (prev === 'hidden' ? 'offlineReady' : prev));
+    window.addEventListener('krs-pwa-update-ready', handleUpdateReady);
+    window.addEventListener('krs-pwa-offline-ready', handleOfflineReady);
+    return () => {
+      window.removeEventListener('krs-pwa-update-ready', handleUpdateReady);
+      window.removeEventListener('krs-pwa-offline-ready', handleOfflineReady);
+    };
   }, []);
 
   useEffect(() => {
@@ -508,6 +572,11 @@ export default function KrsMasterApp() {
 
   return (
     <div className="min-h-screen bg-[radial-gradient(circle_at_top,_rgba(209,228,255,0.95),_rgba(246,250,254,0.98)_38%,_#edf3f7_100%)] pb-24 font-sans text-[#171c1f] md:pb-8">
+      <UpdateBanner
+        state={updateBanner}
+        onDismiss={() => setUpdateBanner('hidden')}
+        onRefresh={() => window.location.reload()}
+      />
       <header className="fixed top-0 z-50 flex min-h-[7rem] w-full items-center justify-between border-b border-white/60 bg-[#f6fafe]/80 px-4 py-3 backdrop-blur-xl md:px-6">
         <div className="flex items-start gap-3">
           <InventoryIcon className="mt-0.5 h-6 w-6 text-[#002542]" />
@@ -855,6 +924,24 @@ function BundleField({ label, children }: { label: string; children: React.React
 function StorageBanner({ status, message }: { status: StorageStatus; message: string | null }) {
   const tone = status === 'loaded' ? 'border-[#cbe7d2] bg-[#eef8ee] text-[#005c29]' : status === 'saving' ? 'border-[#cfe0f4] bg-[#eef5fd] text-[#174f83]' : status === 'error' ? 'border-[#f1c5c0] bg-[#fff0ee] text-[#93000a]' : 'border-[#dce6f0] bg-white/85 text-[#5b6670]';
   return <div className={`mt-1.5 inline-flex max-w-full rounded-full border px-3 py-1 text-[11px] shadow-[0_4px_16px_rgba(0,37,66,0.04)] ${tone}`}>{message}</div>;
+}
+
+function UpdateBanner({ state, onDismiss, onRefresh }: { state: UpdateBannerState; onDismiss: () => void; onRefresh: () => void }) {
+  if (state === 'hidden') return null;
+  const message = state === 'updateReady'
+    ? '새 버전이 준비되었습니다. 작성 중인 입력값은 유지되며 새로고침 후 최신 화면이 적용됩니다.'
+    : '이 기기에서 오프라인 준비가 완료되었습니다.';
+  return (
+    <div className="fixed inset-x-0 top-3 z-[60] flex justify-center px-4">
+      <div className="flex w-full max-w-xl items-center justify-between gap-3 rounded-[1.5rem] border border-[#cfe0f4] bg-white/95 px-4 py-3 shadow-[0_18px_40px_rgba(0,37,66,0.14)] backdrop-blur">
+        <p className="text-sm text-[#174f83]">{message}</p>
+        <div className="flex items-center gap-2">
+          {state === 'updateReady' && <button onClick={onRefresh} className="rounded-xl bg-[#002542] px-3 py-2 text-sm font-semibold text-white">지금 반영</button>}
+          <button onClick={onDismiss} className="rounded-xl bg-[#edf4fb] px-3 py-2 text-sm font-semibold text-[#002542]">닫기</button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function ImportHistory({ item }: { item: PersistedHistoryItem }) {

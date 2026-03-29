@@ -21,6 +21,7 @@ Goal:
 - confirm install flow and launch quality
 - verify caching/update behavior after deployment
 - check camera/scanner behavior in standalone mode
+- verify draft restore and update banner behavior
 
 ## Highest Priority
 
@@ -130,8 +131,9 @@ Reason:
 
 Actions:
 - confirm a new deploy updates the installed app correctly
-- decide whether an explicit update toast is needed
+- review whether current update banner timing/message needs refinement
 - verify offline fallback expectations with real usage
+- verify draft restore does not revive stale values after successful save
 
 Expected result:
 - installed app updates predictably without confusing stale UI
@@ -159,4 +161,5 @@ Before next release:
 - current scanner logic is in `src/KrsMasterApp.tsx`
 - parser/matching logic is in `src/lib/master.ts`
 - PWA manifest/service worker are now enabled
+- update banner and local draft restore are now enabled
 - real blocking issue for iPhone is still HTTPS/certificate first, scanner fallback second
