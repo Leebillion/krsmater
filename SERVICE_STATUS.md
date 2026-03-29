@@ -3,6 +3,8 @@
 ## Overview
 KRS Master is a web app for importing a product master file, syncing the active master through the server, searching products, scanning QR/barcodes, and matching scanned values to existing master barcodes even when they are not perfectly identical.
 
+It now also supports PWA installation with standalone launch behavior.
+
 ## Current User Flow
 1. User opens the web app.
 2. App restores the last cached master from IndexedDB if available.
@@ -13,6 +15,7 @@ KRS Master is a web app for importing a product master file, syncing the active 
 7. User can open the scanner screen and scan QR/barcodes.
 8. App shows exact matches first, then similar barcode candidates.
 9. Each result card also renders a barcode that can be scanned by another scanner.
+10. Installed users can relaunch the app from the home screen.
 
 ## Current Data Model
 Master file is treated as a fixed-width text file.
@@ -42,6 +45,12 @@ Main files:
 - search flow
 - scanner flow
 - local restore and server sync coordination
+- scanner preference persistence
+
+### `src/main.tsx` / `vite.config.ts`
+- service worker registration
+- manifest generation
+- installable PWA configuration
 
 ### `src/lib/master.ts`
 - master file parsing
@@ -101,7 +110,14 @@ Current behavior:
 - high-resolution and continuous-focus hints are requested where supported
 - camera preview shows `스캔중` while reading
 - successful reads briefly show `스캔성공`
+- if scanner was previously enabled, the next visit auto-attempts camera activation
 - if browser is not in a secure context, an explanatory error is shown
+
+## Current PWA Behavior
+- build generates a web app manifest and service worker
+- app can be installed from supported browsers
+- launch mode is `standalone`
+- static shell assets are cached for quicker revisit
 
 ## Important Operational Note
 iPhone camera scanning still requires HTTPS.
@@ -113,6 +129,7 @@ Even with fallback scanning, `navigator.mediaDevices.getUserMedia` can be blocke
 - mobile browsers may ignore some focus constraints even when requested
 - some source/docs still contain mojibake from past encoding mismatch
 - iPhone scanning still depends on secure context and camera permission
+- installed app update behavior should be verified on real deployments
 
 ## Current Nginx/Deployment Assumption
 The service is deployed behind nginx.
@@ -132,7 +149,9 @@ Production artifact:
 - search result ranking
 - barcode preview rendering
 - scanner status overlay
+- automatic scanner reactivation attempt on revisit
 - fallback ID generation when `crypto.randomUUID()` is unavailable
 - broader upload file chooser extensions: `.txt`, `.dat`, `.mst`, `.csv`
 - bundle report save / edit / delete
 - bundle master upload / lookup
+- installable PWA manifest and service worker

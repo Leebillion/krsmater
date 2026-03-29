@@ -16,11 +16,11 @@ Focus points:
 Goal:
 - remove mojibake from source and docs so maintenance is safer
 
-### 3. Convert to PWA
+### 3. Verify installed PWA behavior
 Goal:
-- installable web app
-- better field usability
-- offline-friendly shell and cache
+- confirm install flow and launch quality
+- verify caching/update behavior after deployment
+- check camera/scanner behavior in standalone mode
 
 ## Highest Priority
 
@@ -123,6 +123,19 @@ Actions:
 Expected result:
 - more reliable scanning on difficult mobile hardware
 
+### 8. Harden PWA update UX
+Reason:
+- service worker caching is now enabled
+- update and cache invalidation behavior should be verified in production
+
+Actions:
+- confirm a new deploy updates the installed app correctly
+- decide whether an explicit update toast is needed
+- verify offline fallback expectations with real usage
+
+Expected result:
+- installed app updates predictably without confusing stale UI
+
 ## Deployment Checklist
 
 Before next release:
@@ -138,10 +151,12 @@ Before next release:
 9. test scanner on Android Chrome
 10. test scanner on iPhone Safari/Chrome
 11. test scanner on Galaxy S25
+12. test installed PWA launch and update flow
 
 ## Notes For Next Person
 - shared master sync already exists with Express + SQLite
 - local IndexedDB is now cache/restore oriented, not the only persistence layer
 - current scanner logic is in `src/KrsMasterApp.tsx`
 - parser/matching logic is in `src/lib/master.ts`
+- PWA manifest/service worker are now enabled
 - real blocking issue for iPhone is still HTTPS/certificate first, scanner fallback second

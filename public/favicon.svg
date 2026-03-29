@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <rect width="128" height="128" rx="28" fill="#002542" />
+  <circle cx="64" cy="64" r="42" fill="#d1e4ff" />
+  <text x="64" y="74" text-anchor="middle" font-family="Segoe UI, Arial, sans-serif" font-size="34" font-weight="700" fill="#ffffff">KRS</text>
+</svg>

@@ -44,6 +44,7 @@ const navItems = [
   { id: 'bundle' as const, label: '번들', icon: <BundleIcon /> },
   { id: 'import' as const, label: '업로드', icon: <UploadIcon fill /> },
 ];
+const scannerPreferenceKey = 'krs-master-scanner-enabled';
 
 const emptyBundleForm: BundleReportInput = {
   bundleName: '',
@@ -116,6 +117,29 @@ export default function KrsMasterApp() {
       scanFeedbackTimeoutRef.current = null;
     }, 1200);
   };
+
+  const updateScannerEnabled = (enabled: boolean) => {
+    setScannerEnabled(enabled);
+    try {
+      window.localStorage.setItem(scannerPreferenceKey, enabled ? 'true' : 'false');
+    } catch {
+      // Ignore storage failures and keep scanner behavior local to the current session.
+    }
+  };
+
+  const toggleScannerEnabled = () => {
+    updateScannerEnabled(!scannerEnabled);
+  };
+
+  useEffect(() => {
+    try {
+      if (window.localStorage.getItem(scannerPreferenceKey) === 'true') {
+        setScannerEnabled(true);
+      }
+    } catch {
+      // Ignore preference restore failures.
+    }
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -502,7 +526,7 @@ export default function KrsMasterApp() {
 
       <main className="mx-auto grid max-w-7xl grid-cols-1 gap-8 px-6 pt-36 xl:grid-cols-[minmax(0,1.3fr)_24rem]">
         <div className="space-y-6">
-          {view === 'scanner' && <ScannerPanel videoRef={videoRef} scannerEnabled={scannerEnabled} setScannerEnabled={setScannerEnabled} scanInput={scanInput} setScanInput={setScanInput} lastScanRaw={lastScanRaw} scanStatus={scanStatus} scanFeedback={scanFeedback} scanError={scanError} onClear={() => { clearScanFeedbackTimeout(); setScanInput(''); setLastScanRaw(''); setScanFeedback(scannerEnabled ? 'scanning' : 'idle'); }} />}
+          {view === 'scanner' && <ScannerPanel videoRef={videoRef} scannerEnabled={scannerEnabled} onToggleScanner={toggleScannerEnabled} scanInput={scanInput} setScanInput={setScanInput} lastScanRaw={lastScanRaw} scanStatus={scanStatus} scanFeedback={scanFeedback} scanError={scanError} onClear={() => { clearScanFeedbackTimeout(); setScanInput(''); setLastScanRaw(''); setScanFeedback(scannerEnabled ? 'scanning' : 'idle'); }} />}
           {view === 'search' && <SearchPanel query={query} setQuery={setQuery} />}
           {view === 'import' && <ImportPanel inputRef={inputRef} uploading={uploading} uploadMessage={uploadMessage} onChoose={() => inputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await saveMasterFile(file); event.target.value = ''; }} />}
           {view === 'bundle' && <BundlePanel bundleTab={bundleTab} setBundleTab={setBundleTab} onOpenReportStatus={() => void openBundleReportStatus()} bundleForm={bundleForm} setBundleForm={setBundleForm} bundleReportBusy={bundleReportBusy} bundleReportMessage={bundleReportMessage} onSave={saveBundleReport} onDownload={downloadBundleDb} bundleReportRows={bundleReportRows} bundleReportRowsBusy={bundleReportRowsBusy} bundleReportRowsMessage={bundleReportRowsMessage} editingReportId={editingReportId} editingReportForm={editingReportForm} setEditingReportForm={setEditingReportForm} onRefreshReportRows={() => void loadBundleReportRows()} onStartEdit={startEditBundleReport} onCancelEdit={cancelEditBundleReport} onSaveEdit={() => void saveEditedBundleReport()} onDelete={(id) => void removeBundleReport(id)} bundleMasterInputRef={bundleMasterInputRef} bundleMasterBusy={bundleMasterBusy} bundleMasterMessage={bundleMasterMessage} bundleMasterSummary={bundleMasterSummary} onPickBundleMaster={() => bundleMasterInputRef.current?.click()} onBundleMasterFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await uploadBundleMasterFile(file); event.target.value = ''; }} bundleLookupQuery={bundleLookupQuery} setBundleLookupQuery={setBundleLookupQuery} bundleLookupItems={bundleLookupItems} bundleLookupBusy={bundleLookupBusy} bundleLookupMessage={bundleLookupMessage} onLookup={() => void loadBundleLookup(bundleLookupQuery)} />}
@@ -535,10 +559,10 @@ function SearchPanel({ query, setQuery }: { query: string; setQuery: React.Dispa
   return <Panel title="바코드 검색" icon={<SearchIcon className="h-5 w-5" />}><div className="flex flex-col gap-3 md:flex-row"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="바코드, 상품명, 축약명 검색" className="flex-1 rounded-2xl border border-[#d6e0ea] bg-white px-5 py-4 outline-none" /><button onClick={() => setQuery('')} className="rounded-2xl bg-[#edf4fb] px-5 py-4 font-semibold text-[#002542]">초기화</button></div></Panel>;
 }
 
-function ScannerPanel(props: { videoRef: React.RefObject<HTMLVideoElement | null>; scannerEnabled: boolean; setScannerEnabled: React.Dispatch<React.SetStateAction<boolean>>; scanInput: string; setScanInput: React.Dispatch<React.SetStateAction<string>>; lastScanRaw: string; scanStatus: ScanStatus; scanFeedback: ScanFeedback; scanError: string | null; onClear: () => void }) {
+function ScannerPanel(props: { videoRef: React.RefObject<HTMLVideoElement | null>; scannerEnabled: boolean; onToggleScanner: () => void; scanInput: string; setScanInput: React.Dispatch<React.SetStateAction<string>>; lastScanRaw: string; scanStatus: ScanStatus; scanFeedback: ScanFeedback; scanError: string | null; onClear: () => void }) {
   const overlayTone = props.scanFeedback === 'success' ? 'bg-[#1d6f42]/88 text-white' : 'bg-[#002542]/78 text-white';
   const overlayLabel = props.scanFeedback === 'success' ? '스캔성공' : '스캔중';
-  return <Panel title="QR / 바코드 스캐너" icon={<ScannerIcon className="h-5 w-5" />}><div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_20rem]"><div className="space-y-4"><div className="relative aspect-[4/3] overflow-hidden rounded-[2rem] border border-[#153049] bg-[#07131d]"><video ref={props.videoRef} className="h-full w-full object-cover" muted playsInline />{props.scannerEnabled && props.scanStatus === 'active' && <div className={`absolute left-1/2 top-4 -translate-x-1/2 rounded-full px-4 py-2 text-sm font-bold shadow-[0_10px_24px_rgba(0,0,0,0.25)] ${overlayTone}`}>{overlayLabel}</div>}{!props.scannerEnabled && <div className="absolute inset-0 flex items-center justify-center text-sm text-white/80">카메라를 켜면 스캔을 시작합니다.</div>}</div><div className="flex flex-wrap gap-3"><button onClick={() => props.setScannerEnabled((prev) => !prev)} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white">{props.scannerEnabled ? '카메라 끄기' : '카메라 활성화'}</button><button onClick={props.onClear} className="rounded-2xl bg-[#edf4fb] px-5 py-3 font-semibold text-[#002542]">재스캔</button></div></div><div className="space-y-4"><StatusCard scanStatus={props.scanStatus} scanFeedback={props.scanFeedback} scanError={props.scanError} /><InfoBox label="최근 스캔 원문" value={props.lastScanRaw || '-'} mono /><div className="rounded-[1.75rem] border border-[#dce6f0] bg-[#f8fbfd] p-5"><label className="text-sm text-[#5b6670]">직접 입력 / 보정</label><input value={props.scanInput} onChange={(event) => props.setScanInput(event.target.value)} placeholder="스캔값을 직접 입력할 수 있습니다." className="mt-3 w-full rounded-2xl border border-[#d6e0ea] bg-white px-4 py-3 outline-none" /></div></div></div></Panel>;
+  return <Panel title="QR / 바코드 스캐너" icon={<ScannerIcon className="h-5 w-5" />}><div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_20rem]"><div className="space-y-4"><div className="relative aspect-[4/3] overflow-hidden rounded-[2rem] border border-[#153049] bg-[#07131d]"><video ref={props.videoRef} className="h-full w-full object-cover" muted playsInline />{props.scannerEnabled && props.scanStatus === 'active' && <div className={`absolute left-1/2 top-4 -translate-x-1/2 rounded-full px-4 py-2 text-sm font-bold shadow-[0_10px_24px_rgba(0,0,0,0.25)] ${overlayTone}`}>{overlayLabel}</div>}{!props.scannerEnabled && <div className="absolute inset-0 flex items-center justify-center text-sm text-white/80">카메라를 켜면 스캔을 시작합니다.</div>}</div><div className="flex flex-wrap gap-3"><button onClick={props.onToggleScanner} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white">{props.scannerEnabled ? '카메라 끄기' : '카메라 활성화'}</button><button onClick={props.onClear} className="rounded-2xl bg-[#edf4fb] px-5 py-3 font-semibold text-[#002542]">재스캔</button></div></div><div className="space-y-4"><StatusCard scanStatus={props.scanStatus} scanFeedback={props.scanFeedback} scanError={props.scanError} /><InfoBox label="최근 스캔 원문" value={props.lastScanRaw || '-'} mono /><div className="rounded-[1.75rem] border border-[#dce6f0] bg-[#f8fbfd] p-5"><label className="text-sm text-[#5b6670]">직접 입력 / 보정</label><input value={props.scanInput} onChange={(event) => props.setScanInput(event.target.value)} placeholder="스캔값을 직접 입력할 수 있습니다." className="mt-3 w-full rounded-2xl border border-[#d6e0ea] bg-white px-4 py-3 outline-none" /></div></div></div></Panel>;
 }
 
 function BundlePanel(props: {

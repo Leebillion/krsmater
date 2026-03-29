@@ -8,6 +8,7 @@ KRS Master currently includes:
 - scanner / search / bundle / upload navigation
 - bundle reporting, bundle report status management, and bundle master lookup
 - live QR/barcode scanner status overlay and result feedback
+- installable PWA shell with manifest and service worker registration
 
 ## Current Working Areas
 
@@ -22,8 +23,15 @@ KRS Master currently includes:
 - after a successful read, the preview briefly shows `스캔성공`
 - both native `BarcodeDetector` and ZXing fallback paths update the same scan feedback state
 - camera startup now prefers rear camera, high resolution, and continuous focus hints
+- once enabled, scanner auto-reactivation is attempted on the next visit
 
-### 3. Bundle Menu
+### 3. PWA
+- Vite PWA plugin is configured
+- manifest and service worker are generated at build time
+- home screen installation is available with standalone launch
+- static assets are cached for faster revisit and more stable shell loading
+
+### 4. Bundle Menu
 Bundle menu tabs are currently:
 
 - `번들 제보`
@@ -38,13 +46,13 @@ Implemented behavior:
 - bundle master Excel upload
 - bundle master search by product name or barcode
 
-### 4. Bundle Input / Validation
+### 5. Bundle Input / Validation
 - bundle report field limits are enforced at input time
 - barcode fields allow `1~13` digits, including leading `0`
 - name fields are limited to `30byte`
 - quantity is limited to `2` digits
 
-### 5. Bundle Master Upload Rules
+### 6. Bundle Master Upload Rules
 Current upload behavior:
 
 - first row is treated as header
@@ -71,6 +79,12 @@ Accepted headers include practical variants such as:
 - changed scanner reset text from `초기화` to `재스캔`
 - added preview overlay feedback for `스캔중` and `스캔성공`
 - added focus-related camera constraints to improve Android device behavior, including Galaxy S25 reports
+- persisted scanner preference so the next visit auto-attempts camera activation
+
+### PWA
+- added installable app manifest
+- added service worker registration for production builds
+- added app icons including Apple touch icon
 
 ### Bundle Report Status
 - added `GET /api/bundles/report`
@@ -124,9 +138,10 @@ Confirmed locally:
 ## Recommended Next Checks
 1. verify scanner focus/read speed on actual Galaxy S25 hardware
 2. verify iPhone Safari/Chrome behavior under valid HTTPS
-3. normalize display of old UTC-saved bundle report times if needed
-4. consider search/filter inside `번들 제보 상황` when report count grows
-5. clean remaining mojibake strings in source and docs when convenient
+3. verify PWA install flow on Android and iPhone
+4. normalize display of old UTC-saved bundle report times if needed
+5. consider search/filter inside `번들 제보 상황` when report count grows
+6. clean remaining mojibake strings in source and docs when convenient
 
 ## Useful Commands
 
