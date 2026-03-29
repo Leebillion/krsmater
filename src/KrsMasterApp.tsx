@@ -23,9 +23,13 @@ import { type BarcodeMatch, type MasterFileSummary, type MasterRecord, findBarco
 type ViewMode = 'scanner' | 'search' | 'bundle' | 'import';
 type BundleTab = 'report' | 'reportStatus' | 'lookup';
 type ScanStatus = 'idle' | 'starting' | 'active' | 'unsupported' | 'denied' | 'error';
+type ScanFeedback = 'idle' | 'scanning' | 'success';
 type StorageStatus = 'idle' | 'loading' | 'loaded' | 'saving' | 'error';
 type DetectorResult = { rawValue?: string };
-type ScannerControls = { stop: () => void };
+type ScannerControls = {
+  stop: () => void;
+  streamVideoConstraintsApply?: (constraints: MediaTrackConstraints, trackFilter?: (track: MediaStreamTrack) => boolean) => Promise<void>;
+};
 type BarcodeDetectorCtor = new (options?: { formats?: string[] }) => { detect: (source: CanvasImageSource) => Promise<DetectorResult[]> };
 
 declare global {
@@ -61,6 +65,7 @@ export default function KrsMasterApp() {
   const [lastScanRaw, setLastScanRaw] = useState('');
   const [scannerEnabled, setScannerEnabled] = useState(false);
   const [scanStatus, setScanStatus] = useState<ScanStatus>('idle');
+  const [scanFeedback, setScanFeedback] = useState<ScanFeedback>('idle');
   const [scanError, setScanError] = useState<string | null>(null);
   const [storageStatus, setStorageStatus] = useState<StorageStatus>('loading');
   const [storageMessage, setStorageMessage] = useState<string | null>('저장된 마스터와 서버 상태를 확인하고 있습니다.');
@@ -87,11 +92,30 @@ export default function KrsMasterApp() {
   const rafRef = useRef<number | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const scanControlsRef = useRef<ScannerControls | null>(null);
+  const scanFeedbackTimeoutRef = useRef<number | null>(null);
 
   const activeInput = view === 'scanner' ? scanInput : view === 'search' ? query : '';
   const matches = useMemo(() => findBarcodeMatches(records, activeInput), [records, activeInput]);
   const exactMatch = matches.find((item) => item.matchType === 'exact');
   const similarMatches = exactMatch ? matches.filter((item) => item !== exactMatch) : matches;
+
+  const clearScanFeedbackTimeout = () => {
+    if (scanFeedbackTimeoutRef.current !== null) {
+      window.clearTimeout(scanFeedbackTimeoutRef.current);
+      scanFeedbackTimeoutRef.current = null;
+    }
+  };
+
+  const markScanSuccess = (raw: string) => {
+    setLastScanRaw(raw);
+    setScanInput(raw);
+    setScanFeedback('success');
+    clearScanFeedbackTimeout();
+    scanFeedbackTimeoutRef.current = window.setTimeout(() => {
+      setScanFeedback(scannerEnabled ? 'scanning' : 'idle');
+      scanFeedbackTimeoutRef.current = null;
+    }, 1200);
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -153,6 +177,8 @@ export default function KrsMasterApp() {
 
   useEffect(() => {
     if (!scannerEnabled || view !== 'scanner') {
+      clearScanFeedbackTimeout();
+      setScanFeedback('idle');
       stopScanner(videoRef, rafRef, streamRef, scanControlsRef);
       return;
     }
@@ -160,30 +186,31 @@ export default function KrsMasterApp() {
     const start = async () => {
       try {
         setScanStatus('starting');
+        setScanFeedback('idle');
         setScanError(null);
         if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
           setScanStatus('unsupported');
           setScanError('현재 환경에서는 카메라 접근이 제한됩니다.');
           return;
         }
+        const videoConstraints = buildScannerVideoConstraints();
         if (window.BarcodeDetector) {
-          const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: { ideal: 'environment' } }, audio: false });
+          const stream = await navigator.mediaDevices.getUserMedia({ video: videoConstraints, audio: false });
           if (cancelled) return;
           streamRef.current = stream;
           if (!videoRef.current) return;
           videoRef.current.srcObject = stream;
           await videoRef.current.play();
+          await optimizeScannerTrack(stream.getVideoTracks()[0]);
           setScanStatus('active');
+          setScanFeedback('scanning');
           const detector = new window.BarcodeDetector({ formats: ['qr_code', 'ean_13', 'upc_a', 'upc_e', 'code_128', 'code_39'] });
           const tick = async () => {
             if (cancelled || !videoRef.current) return;
             try {
               const found = await detector.detect(videoRef.current);
               const raw = found[0]?.rawValue?.trim();
-              if (raw) {
-                setLastScanRaw(raw);
-                setScanInput(raw);
-              }
+              if (raw) markScanSuccess(raw);
             } catch {
               setScanError('카메라 프레임 분석에 실패했습니다.');
             }
@@ -194,16 +221,18 @@ export default function KrsMasterApp() {
           const { BrowserMultiFormatReader } = await import('@zxing/browser');
           if (cancelled || !videoRef.current) return;
           const reader = new BrowserMultiFormatReader();
-          const controls = await reader.decodeFromVideoDevice(undefined, videoRef.current, (result) => {
+          const controls = await reader.decodeFromConstraints({ video: videoConstraints, audio: false }, videoRef.current, (result) => {
             if (!result) return;
             const raw = result.getText().trim();
-            if (raw) {
-              setLastScanRaw(raw);
-              setScanInput(raw);
-            }
+            if (raw) markScanSuccess(raw);
           });
-          scanControlsRef.current = { stop: () => controls.stop() };
+          scanControlsRef.current = {
+            stop: () => controls.stop(),
+            streamVideoConstraintsApply: controls.streamVideoConstraintsApply,
+          };
+          await controls.streamVideoConstraintsApply?.(buildScannerFocusConstraints());
           setScanStatus('active');
+          setScanFeedback('scanning');
           setScanError('브라우저 호환 모드로 스캔 중입니다.');
         }
       } catch (error) {
@@ -220,6 +249,8 @@ export default function KrsMasterApp() {
     void start();
     return () => {
       cancelled = true;
+      clearScanFeedbackTimeout();
+      setScanFeedback('idle');
       stopScanner(videoRef, rafRef, streamRef, scanControlsRef);
     };
   }, [scannerEnabled, view]);
@@ -471,7 +502,7 @@ export default function KrsMasterApp() {
 
       <main className="mx-auto grid max-w-7xl grid-cols-1 gap-8 px-6 pt-36 xl:grid-cols-[minmax(0,1.3fr)_24rem]">
         <div className="space-y-6">
-          {view === 'scanner' && <ScannerPanel videoRef={videoRef} scannerEnabled={scannerEnabled} setScannerEnabled={setScannerEnabled} scanInput={scanInput} setScanInput={setScanInput} lastScanRaw={lastScanRaw} scanStatus={scanStatus} scanError={scanError} onClear={() => { setScanInput(''); setLastScanRaw(''); }} />}
+          {view === 'scanner' && <ScannerPanel videoRef={videoRef} scannerEnabled={scannerEnabled} setScannerEnabled={setScannerEnabled} scanInput={scanInput} setScanInput={setScanInput} lastScanRaw={lastScanRaw} scanStatus={scanStatus} scanFeedback={scanFeedback} scanError={scanError} onClear={() => { clearScanFeedbackTimeout(); setScanInput(''); setLastScanRaw(''); setScanFeedback(scannerEnabled ? 'scanning' : 'idle'); }} />}
           {view === 'search' && <SearchPanel query={query} setQuery={setQuery} />}
           {view === 'import' && <ImportPanel inputRef={inputRef} uploading={uploading} uploadMessage={uploadMessage} onChoose={() => inputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await saveMasterFile(file); event.target.value = ''; }} />}
           {view === 'bundle' && <BundlePanel bundleTab={bundleTab} setBundleTab={setBundleTab} onOpenReportStatus={() => void openBundleReportStatus()} bundleForm={bundleForm} setBundleForm={setBundleForm} bundleReportBusy={bundleReportBusy} bundleReportMessage={bundleReportMessage} onSave={saveBundleReport} onDownload={downloadBundleDb} bundleReportRows={bundleReportRows} bundleReportRowsBusy={bundleReportRowsBusy} bundleReportRowsMessage={bundleReportRowsMessage} editingReportId={editingReportId} editingReportForm={editingReportForm} setEditingReportForm={setEditingReportForm} onRefreshReportRows={() => void loadBundleReportRows()} onStartEdit={startEditBundleReport} onCancelEdit={cancelEditBundleReport} onSaveEdit={() => void saveEditedBundleReport()} onDelete={(id) => void removeBundleReport(id)} bundleMasterInputRef={bundleMasterInputRef} bundleMasterBusy={bundleMasterBusy} bundleMasterMessage={bundleMasterMessage} bundleMasterSummary={bundleMasterSummary} onPickBundleMaster={() => bundleMasterInputRef.current?.click()} onBundleMasterFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await uploadBundleMasterFile(file); event.target.value = ''; }} bundleLookupQuery={bundleLookupQuery} setBundleLookupQuery={setBundleLookupQuery} bundleLookupItems={bundleLookupItems} bundleLookupBusy={bundleLookupBusy} bundleLookupMessage={bundleLookupMessage} onLookup={() => void loadBundleLookup(bundleLookupQuery)} />}
@@ -504,8 +535,10 @@ function SearchPanel({ query, setQuery }: { query: string; setQuery: React.Dispa
   return <Panel title="바코드 검색" icon={<SearchIcon className="h-5 w-5" />}><div className="flex flex-col gap-3 md:flex-row"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="바코드, 상품명, 축약명 검색" className="flex-1 rounded-2xl border border-[#d6e0ea] bg-white px-5 py-4 outline-none" /><button onClick={() => setQuery('')} className="rounded-2xl bg-[#edf4fb] px-5 py-4 font-semibold text-[#002542]">초기화</button></div></Panel>;
 }
 
-function ScannerPanel(props: { videoRef: React.RefObject<HTMLVideoElement | null>; scannerEnabled: boolean; setScannerEnabled: React.Dispatch<React.SetStateAction<boolean>>; scanInput: string; setScanInput: React.Dispatch<React.SetStateAction<string>>; lastScanRaw: string; scanStatus: ScanStatus; scanError: string | null; onClear: () => void }) {
-  return <Panel title="QR / 바코드 스캐너" icon={<ScannerIcon className="h-5 w-5" />}><div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_20rem]"><div className="space-y-4"><div className="relative aspect-[4/3] overflow-hidden rounded-[2rem] border border-[#153049] bg-[#07131d]"><video ref={props.videoRef} className="h-full w-full object-cover" muted playsInline />{!props.scannerEnabled && <div className="absolute inset-0 flex items-center justify-center text-sm text-white/80">카메라를 켜면 스캔을 시작합니다.</div>}</div><div className="flex flex-wrap gap-3"><button onClick={() => props.setScannerEnabled((prev) => !prev)} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white">{props.scannerEnabled ? '카메라 끄기' : '카메라 켜기'}</button><button onClick={props.onClear} className="rounded-2xl bg-[#edf4fb] px-5 py-3 font-semibold text-[#002542]">초기화</button></div></div><div className="space-y-4"><StatusCard scanStatus={props.scanStatus} scanError={props.scanError} /><InfoBox label="최근 스캔 원문" value={props.lastScanRaw || '-'} mono /><div className="rounded-[1.75rem] border border-[#dce6f0] bg-[#f8fbfd] p-5"><label className="text-sm text-[#5b6670]">직접 입력 / 보정</label><input value={props.scanInput} onChange={(event) => props.setScanInput(event.target.value)} placeholder="스캔값을 직접 입력할 수 있습니다." className="mt-3 w-full rounded-2xl border border-[#d6e0ea] bg-white px-4 py-3 outline-none" /></div></div></div></Panel>;
+function ScannerPanel(props: { videoRef: React.RefObject<HTMLVideoElement | null>; scannerEnabled: boolean; setScannerEnabled: React.Dispatch<React.SetStateAction<boolean>>; scanInput: string; setScanInput: React.Dispatch<React.SetStateAction<string>>; lastScanRaw: string; scanStatus: ScanStatus; scanFeedback: ScanFeedback; scanError: string | null; onClear: () => void }) {
+  const overlayTone = props.scanFeedback === 'success' ? 'bg-[#1d6f42]/88 text-white' : 'bg-[#002542]/78 text-white';
+  const overlayLabel = props.scanFeedback === 'success' ? '스캔성공' : '스캔중';
+  return <Panel title="QR / 바코드 스캐너" icon={<ScannerIcon className="h-5 w-5" />}><div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_20rem]"><div className="space-y-4"><div className="relative aspect-[4/3] overflow-hidden rounded-[2rem] border border-[#153049] bg-[#07131d]"><video ref={props.videoRef} className="h-full w-full object-cover" muted playsInline />{props.scannerEnabled && props.scanStatus === 'active' && <div className={`absolute left-1/2 top-4 -translate-x-1/2 rounded-full px-4 py-2 text-sm font-bold shadow-[0_10px_24px_rgba(0,0,0,0.25)] ${overlayTone}`}>{overlayLabel}</div>}{!props.scannerEnabled && <div className="absolute inset-0 flex items-center justify-center text-sm text-white/80">카메라를 켜면 스캔을 시작합니다.</div>}</div><div className="flex flex-wrap gap-3"><button onClick={() => props.setScannerEnabled((prev) => !prev)} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white">{props.scannerEnabled ? '카메라 끄기' : '카메라 활성화'}</button><button onClick={props.onClear} className="rounded-2xl bg-[#edf4fb] px-5 py-3 font-semibold text-[#002542]">재스캔</button></div></div><div className="space-y-4"><StatusCard scanStatus={props.scanStatus} scanFeedback={props.scanFeedback} scanError={props.scanError} /><InfoBox label="최근 스캔 원문" value={props.lastScanRaw || '-'} mono /><div className="rounded-[1.75rem] border border-[#dce6f0] bg-[#f8fbfd] p-5"><label className="text-sm text-[#5b6670]">직접 입력 / 보정</label><input value={props.scanInput} onChange={(event) => props.setScanInput(event.target.value)} placeholder="스캔값을 직접 입력할 수 있습니다." className="mt-3 w-full rounded-2xl border border-[#d6e0ea] bg-white px-4 py-3 outline-none" /></div></div></div></Panel>;
 }
 
 function BundlePanel(props: {
@@ -761,9 +794,29 @@ function MetricRow({ label, value }: { label: string; value: string }) {
   return <div className="flex items-center justify-between gap-3 border-b border-[#edf2f7] py-3 last:border-b-0"><span className="text-sm text-[#5b6670]">{label}</span><span className="text-right font-semibold text-[#171c1f]">{value}</span></div>;
 }
 
-function StatusCard({ scanStatus, scanError }: { scanStatus: ScanStatus; scanError: string | null }) {
-  const tone = scanStatus === 'active' ? 'bg-[#e8f7ec] text-[#005c29]' : scanStatus === 'error' ? 'bg-[#ffe7e5] text-[#93000a]' : scanStatus === 'unsupported' || scanStatus === 'denied' ? 'bg-[#fff2dd] text-[#8a5100]' : 'bg-[#e7f0fb] text-[#174f83]';
-  const label = scanStatus === 'starting' ? '카메라 시작 중' : scanStatus === 'active' ? '실시간 스캔 중' : scanStatus === 'unsupported' ? '브라우저 미지원' : scanStatus === 'denied' ? '권한 필요' : scanStatus === 'error' ? '카메라 오류' : '대기 중';
+function StatusCard({ scanStatus, scanFeedback, scanError }: { scanStatus: ScanStatus; scanFeedback: ScanFeedback; scanError: string | null }) {
+  const tone = scanFeedback === 'success'
+    ? 'bg-[#e8f7ec] text-[#005c29]'
+    : scanStatus === 'active'
+      ? 'bg-[#e8f7ec] text-[#005c29]'
+      : scanStatus === 'error'
+        ? 'bg-[#ffe7e5] text-[#93000a]'
+        : scanStatus === 'unsupported' || scanStatus === 'denied'
+          ? 'bg-[#fff2dd] text-[#8a5100]'
+          : 'bg-[#e7f0fb] text-[#174f83]';
+  const label = scanFeedback === 'success'
+    ? '스캔 성공'
+    : scanStatus === 'starting'
+      ? '카메라 시작 중'
+      : scanStatus === 'active'
+        ? '실시간 스캔 중'
+        : scanStatus === 'unsupported'
+          ? '브라우저 미지원'
+          : scanStatus === 'denied'
+            ? '권한 필요'
+            : scanStatus === 'error'
+              ? '카메라 오류'
+              : '대기 중';
   return <div className="rounded-[1.75rem] border border-[#dce6f0] bg-[#f8fbfd] p-5"><div className="flex items-center justify-between gap-3"><span className="text-sm text-[#5b6670]">스캐너 상태</span><span className={`rounded-full px-3 py-1 text-xs font-bold ${tone}`}>{label}</span></div><p className="mt-3 text-sm leading-6 text-[#5b6670]">{scanError ?? '카메라를 켜면 QR 코드와 바코드를 읽습니다.'}</p></div>;
 }
 
@@ -797,6 +850,35 @@ function stopScanner(videoRef: React.RefObject<HTMLVideoElement | null>, rafRef:
   if (scanControlsRef.current) { scanControlsRef.current.stop(); scanControlsRef.current = null; }
   if (streamRef.current) { streamRef.current.getTracks().forEach((track) => track.stop()); streamRef.current = null; }
   if (videoRef.current) { videoRef.current.pause(); videoRef.current.srcObject = null; }
+}
+
+function buildScannerVideoConstraints(): MediaTrackConstraints {
+  return {
+    facingMode: { ideal: 'environment' },
+    width: { ideal: 1920 },
+    height: { ideal: 1080 },
+    ...buildScannerFocusConstraints(),
+  };
+}
+
+function buildScannerFocusConstraints(): MediaTrackConstraints {
+  const supported = navigator.mediaDevices?.getSupportedConstraints?.() ?? {};
+  const advanced: MediaTrackConstraintSet[] = [];
+  if ((supported as Record<string, boolean>).focusMode) advanced.push({ focusMode: 'continuous' } as MediaTrackConstraintSet);
+  return advanced.length ? { advanced } : {};
+}
+
+async function optimizeScannerTrack(track?: MediaStreamTrack) {
+  if (!track || typeof track.applyConstraints !== 'function') return;
+  const advanced: MediaTrackConstraintSet[] = [];
+  const capabilities = typeof track.getCapabilities === 'function' ? (track.getCapabilities() as Record<string, unknown>) : null;
+  if (capabilities && 'focusMode' in capabilities) advanced.push({ focusMode: 'continuous' } as MediaTrackConstraintSet);
+  if (!advanced.length) return;
+  try {
+    await track.applyConstraints({ advanced });
+  } catch {
+    // Some mobile browsers reject focus hints even when capability probing succeeds.
+  }
 }
 
 function validateBundleForm(form: BundleReportInput) {

@@ -2,30 +2,23 @@
 
 ## Current Requested Priorities
 
-### 1. Move master storage to shared DB
+### 1. Verify scanner behavior on real devices
 Goal:
-- Once a master file is uploaded, all devices should be able to search the same dataset.
+- Android, iPhone, and desktop browsers should all have a stable scan path.
 
-Target direction:
-- Upload on server
-- Parse on server
-- Store master rows in DB
-- Search/match through shared API
-- Keep IndexedDB only as optional cache
+Focus points:
+- HTTPS and valid certificate
+- camera permission flow
+- iPhone fallback scanner path
+- Galaxy S25 focus / near-distance readability
 
-### 2. Make camera usable on all devices
+### 2. Clean broken Korean text / encoding issues
 Goal:
-- Android, iPhone, desktop browsers should all have a working scan path.
-
-Blocking conditions:
-- HTTPS
-- valid certificate
-- camera permission
-- iOS fallback scanner path
+- remove mojibake from source and docs so maintenance is safer
 
 ### 3. Convert to PWA
 Goal:
-- Installable web app
+- installable web app
 - better field usability
 - offline-friendly shell and cache
 
@@ -34,12 +27,12 @@ Goal:
 ### 1. Fix iPhone scanner in real deployment
 Reason:
 - iPhone camera access needs HTTPS
-- current service appears to be accessed in a non-secure or certificate-warning context
+- even with fallback scanning, invalid certs or insecure context will still block camera access
 
 Actions:
 - apply valid SSL certificate on nginx
 - force redirect `http -> https`
-- verify certificate trust on iPhone Safari/Chrome
+- verify certificate trust on iPhone Safari and Chrome
 - retest scanner on actual iPhone device
 
 Expected result:
@@ -49,36 +42,49 @@ Expected result:
 ### 2. Re-check ZXing fallback on iPhone
 Reason:
 - native `BarcodeDetector` is not generally available on iPhone browsers
-- fallback path must be the main mobile path on iOS
+- fallback path is the main mobile path on iOS
 
 Actions:
 - test camera startup on iPhone Chrome and Safari
 - verify QR read speed and barcode read speed
-- verify camera switching / rear camera selection behavior
+- verify rear camera selection behavior
 - confirm cleanup when leaving scanner screen
 
 Expected result:
 - scanner works without native `BarcodeDetector`
 
+### 3. Validate Galaxy S25 focus improvements
+Reason:
+- a field report says focus is not locking well on Galaxy S25
+- current build now requests rear camera, high resolution, and continuous focus hints, but device support can vary
+
+Actions:
+- test QR and barcode reads at close and medium distance
+- check whether preview sharpness improves after a short settle time
+- if still weak, consider tap-to-focus attempt or torch toggle
+
+Expected result:
+- scanner reaches readable focus faster on Galaxy S25
+
 ## High Priority
 
-### 3. Clean broken Korean text / encoding issues in source
+### 4. Clean mojibake in source and docs
 Reason:
-- several UI strings in `src/App.tsx` and `src/lib/master.ts` appear corrupted locally
-- this can create future maintenance risk
+- several strings in code and markdown still show encoding damage
+- this creates maintenance and QA risk
 
 Actions:
 - normalize files to UTF-8
-- replace broken Korean strings with clean Korean text
+- replace broken Korean text with clean Korean labels/messages
 - verify UI labels after build
 
 Expected result:
-- source code is readable
+- source and docs are readable
 - labels are stable and maintainable
 
-### 4. Improve upload error reporting
+### 5. Improve upload error reporting
 Reason:
-- current failures can look similar to end users
+- current failures can still look similar to end users
 - easier debugging is needed for operations
 
 Actions:
@@ -91,10 +97,10 @@ Expected result:
 
 ## Medium Priority
 
-### 5. Expand parser for real-world file variants
+### 6. Expand parser for real-world file variants
 Reason:
 - field assumptions may differ by actual source files
-- `.dat`, `.mst`, `.csv` are now selectable but parser is still fixed-width oriented
+- `.dat`, `.mst`, `.csv` are selectable but parser is still fixed-width oriented first
 
 Actions:
 - inspect real samples for each extension
@@ -105,21 +111,17 @@ Actions:
 Expected result:
 - import succeeds for actual production file variants
 
-### 6. Add backend sync strategy
+### 7. Decide whether tap-to-focus or torch UI is needed
 Reason:
-- IndexedDB is only local to one browser/device
-- operations may require a shared latest master
+- some Android devices may still need extra camera assistance beyond current constraints
 
 Actions:
-- implement server-side upload and parsing
-- store current active master in DB
-- keep IndexedDB as local cache only
-- add master version metadata API
-- sync latest master from server on app startup
+- test whether `applyConstraints` focus hints are honored on target browsers
+- if needed, add tap-to-focus attempt on preview touch
+- if useful, add flashlight toggle where supported
 
 Expected result:
-- shared master across devices
-- still fast local search/scanning
+- more reliable scanning on difficult mobile hardware
 
 ## Deployment Checklist
 
@@ -135,10 +137,11 @@ Before next release:
 8. test barcode rendering
 9. test scanner on Android Chrome
 10. test scanner on iPhone Safari/Chrome
+11. test scanner on Galaxy S25
 
 ## Notes For Next Person
-- Current persistence is IndexedDB only.
-- Current scanner logic is in `src/App.tsx`.
-- Current parser logic is in `src/lib/master.ts`.
-- Current service name is `KRS Master`.
-- Real blocking issue for iPhone is likely HTTPS/certificate first, scanner fallback second.
+- shared master sync already exists with Express + SQLite
+- local IndexedDB is now cache/restore oriented, not the only persistence layer
+- current scanner logic is in `src/KrsMasterApp.tsx`
+- parser/matching logic is in `src/lib/master.ts`
+- real blocking issue for iPhone is still HTTPS/certificate first, scanner fallback second
