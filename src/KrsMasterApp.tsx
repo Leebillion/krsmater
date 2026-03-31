@@ -36,6 +36,7 @@ type AppDraftState = {
   view: ViewMode;
   bundleTab: BundleTab;
   query: string;
+  submittedQuery: string;
   scanInput: string;
   bundleLookupQuery: string;
   bundleForm: BundleReportInput;
@@ -57,6 +58,7 @@ const navItems = [
 ];
 const scannerPreferenceKey = 'krs-master-scanner-enabled';
 const appDraftKey = 'krs-master-app-draft-v1';
+const scannerStickyTopClass = 'top-[8.5rem]';
 
 const emptyBundleForm: BundleReportInput = {
   bundleName: '',
@@ -69,6 +71,7 @@ const emptyAppDraft: AppDraftState = {
   view: 'scanner',
   bundleTab: 'report',
   query: '',
+  submittedQuery: '',
   scanInput: '',
   bundleLookupQuery: '',
   bundleForm: emptyBundleForm,
@@ -84,6 +87,7 @@ export default function KrsMasterApp() {
   const [uploading, setUploading] = useState(false);
   const [uploadMessage, setUploadMessage] = useState<string | null>(null);
   const [query, setQuery] = useState('');
+  const [submittedQuery, setSubmittedQuery] = useState('');
   const [scanInput, setScanInput] = useState('');
   const [lastScanRaw, setLastScanRaw] = useState('');
   const [scannerEnabled, setScannerEnabled] = useState(false);
@@ -118,10 +122,14 @@ export default function KrsMasterApp() {
   const scanControlsRef = useRef<ScannerControls | null>(null);
   const scanFeedbackTimeoutRef = useRef<number | null>(null);
 
-  const activeInput = view === 'scanner' ? scanInput : view === 'search' ? query : '';
+  const activeInput = view === 'scanner' ? scanInput : view === 'search' ? submittedQuery : '';
   const matches = useMemo(() => findBarcodeMatches(records, activeInput), [records, activeInput]);
   const exactMatch = matches.find((item) => item.matchType === 'exact');
   const similarMatches = exactMatch ? matches.filter((item) => item !== exactMatch) : matches;
+  const searchValidation = getSearchValidation(query);
+  const searchEmptyMessage = view === 'scanner'
+    ? '스캔 또는 직접 입력 결과를 기준으로 후보를 보여드립니다.'
+    : searchValidation.message ?? '검색어를 입력한 뒤 검색 버튼을 눌러 주세요.';
 
   const clearScanFeedbackTimeout = () => {
     if (scanFeedbackTimeoutRef.current !== null) {
@@ -156,15 +164,15 @@ export default function KrsMasterApp() {
 
   useEffect(() => {
     try {
-      if (window.localStorage.getItem(scannerPreferenceKey) === 'true') {
-        setScannerEnabled(true);
-      }
+      setScannerEnabled(true);
+      window.localStorage.setItem(scannerPreferenceKey, 'true');
       const storedDraft = window.localStorage.getItem(appDraftKey);
       if (storedDraft) {
         const draft = JSON.parse(storedDraft) as Partial<AppDraftState>;
         if (draft.view === 'scanner' || draft.view === 'search' || draft.view === 'bundle' || draft.view === 'import') setView(draft.view);
         if (draft.bundleTab === 'report' || draft.bundleTab === 'reportStatus' || draft.bundleTab === 'lookup') setBundleTab(draft.bundleTab);
         if (typeof draft.query === 'string') setQuery(draft.query);
+        if (typeof draft.submittedQuery === 'string') setSubmittedQuery(draft.submittedQuery);
         if (typeof draft.scanInput === 'string') setScanInput(draft.scanInput);
         if (typeof draft.bundleLookupQuery === 'string') setBundleLookupQuery(draft.bundleLookupQuery);
         if (draft.bundleForm) setBundleForm({ ...emptyBundleForm, ...draft.bundleForm });
@@ -182,6 +190,7 @@ export default function KrsMasterApp() {
         view,
         bundleTab,
         query,
+        submittedQuery,
         scanInput,
         bundleLookupQuery,
         bundleForm,
@@ -192,7 +201,7 @@ export default function KrsMasterApp() {
     } catch {
       // Ignore draft persistence failures.
     }
-  }, [view, bundleTab, query, scanInput, bundleLookupQuery, bundleForm, editingReportId, editingReportForm]);
+  }, [view, bundleTab, query, submittedQuery, scanInput, bundleLookupQuery, bundleForm, editingReportId, editingReportForm]);
 
   useEffect(() => {
     const handleUpdateReady = () => setUpdateBanner('updateReady');
@@ -553,6 +562,14 @@ export default function KrsMasterApp() {
     }
   };
 
+  const runSearch = () => {
+    if (!searchValidation.canSearch) {
+      setSubmittedQuery('');
+      return;
+    }
+    setSubmittedQuery(query.trim());
+  };
+
   const removeBundleReport = async (id: number) => {
     try {
       setBundleReportRowsBusy(true);
@@ -595,11 +612,11 @@ export default function KrsMasterApp() {
 
       <main className="mx-auto grid max-w-7xl grid-cols-1 gap-8 px-6 pt-36 xl:grid-cols-[minmax(0,1.3fr)_24rem]">
         <div className="space-y-6">
-          {view === 'scanner' && <ScannerPanel videoRef={videoRef} scannerEnabled={scannerEnabled} onToggleScanner={toggleScannerEnabled} scanInput={scanInput} setScanInput={setScanInput} lastScanRaw={lastScanRaw} scanStatus={scanStatus} scanFeedback={scanFeedback} scanError={scanError} onClear={() => { clearScanFeedbackTimeout(); setScanInput(''); setLastScanRaw(''); setScanFeedback(scannerEnabled ? 'scanning' : 'idle'); }} />}
-          {view === 'search' && <SearchPanel query={query} setQuery={setQuery} />}
+          {view === 'scanner' && <div className={`sticky z-30 ${scannerStickyTopClass}`}><ScannerPanel videoRef={videoRef} scannerEnabled={scannerEnabled} onToggleScanner={toggleScannerEnabled} scanInput={scanInput} setScanInput={setScanInput} lastScanRaw={lastScanRaw} scanStatus={scanStatus} scanFeedback={scanFeedback} scanError={scanError} onClear={() => { clearScanFeedbackTimeout(); setScanInput(''); setLastScanRaw(''); setScanFeedback(scannerEnabled ? 'scanning' : 'idle'); }} /></div>}
+          {view === 'search' && <SearchPanel query={query} setQuery={setQuery} onSearch={runSearch} onClear={() => { setQuery(''); setSubmittedQuery(''); }} validationMessage={searchValidation.message} searchEnabled={searchValidation.canSearch} />}
           {view === 'import' && <ImportPanel inputRef={inputRef} uploading={uploading} uploadMessage={uploadMessage} onChoose={() => inputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await saveMasterFile(file); event.target.value = ''; }} />}
           {view === 'bundle' && <BundlePanel bundleTab={bundleTab} setBundleTab={setBundleTab} onOpenReportStatus={() => void openBundleReportStatus()} bundleForm={bundleForm} setBundleForm={setBundleForm} bundleReportBusy={bundleReportBusy} bundleReportMessage={bundleReportMessage} onSave={saveBundleReport} onDownload={downloadBundleDb} bundleReportRows={bundleReportRows} bundleReportRowsBusy={bundleReportRowsBusy} bundleReportRowsMessage={bundleReportRowsMessage} editingReportId={editingReportId} editingReportForm={editingReportForm} setEditingReportForm={setEditingReportForm} onRefreshReportRows={() => void loadBundleReportRows()} onStartEdit={startEditBundleReport} onCancelEdit={cancelEditBundleReport} onSaveEdit={() => void saveEditedBundleReport()} onDelete={(id) => void removeBundleReport(id)} bundleMasterInputRef={bundleMasterInputRef} bundleMasterBusy={bundleMasterBusy} bundleMasterMessage={bundleMasterMessage} bundleMasterSummary={bundleMasterSummary} onPickBundleMaster={() => bundleMasterInputRef.current?.click()} onBundleMasterFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await uploadBundleMasterFile(file); event.target.value = ''; }} bundleLookupQuery={bundleLookupQuery} setBundleLookupQuery={setBundleLookupQuery} bundleLookupItems={bundleLookupItems} bundleLookupBusy={bundleLookupBusy} bundleLookupMessage={bundleLookupMessage} onLookup={() => void loadBundleLookup(bundleLookupQuery)} />}
-          {(view === 'scanner' || view === 'search') && <MatchSection exactMatch={exactMatch} similarMatches={similarMatches} emptyMessage={view === 'scanner' ? '스캔 또는 직접 입력 결과를 기준으로 후보를 보여드립니다.' : '검색어를 입력하면 후보를 보여드립니다.'} />}
+          {(view === 'scanner' || view === 'search') && <MatchSection exactMatch={exactMatch} similarMatches={similarMatches} emptyMessage={searchEmptyMessage} />}
         </div>
         <aside className="space-y-6">
           <Panel title="현재 마스터" icon={<InventoryIcon className="h-5 w-5" />}>
@@ -624,14 +641,51 @@ function ImportPanel({ inputRef, uploading, uploadMessage, onChoose, onFile }: {
   return <Panel title="상품 마스터 업로드" icon={<UploadIcon className="h-5 w-5" />}><input ref={inputRef} type="file" accept=".txt,.dat,.mst,.csv,text/plain,text/csv" className="hidden" onChange={onFile} /><button onClick={onChoose} className="flex min-h-[260px] w-full flex-col items-center justify-center rounded-[2rem] border-2 border-dashed border-[#9eb3c7] bg-[#f0f4f8] p-8"><UploadIcon className="mb-5 h-10 w-10 text-[#002542]" /><p className="text-xl font-bold">파일 선택</p><p className="mt-2 text-sm text-[#5b6670]">서버 DB와 브라우저 저장소를 함께 갱신합니다.</p></button>{(uploading || uploadMessage) && <div className="mt-5 rounded-[1.5rem] border border-[#efe4c8] bg-[#fffdf8] p-5 text-sm text-[#5b6670]">{uploading ? '파일 처리 중...' : uploadMessage}</div>}</Panel>;
 }
 
-function SearchPanel({ query, setQuery }: { query: string; setQuery: React.Dispatch<React.SetStateAction<string>> }) {
-  return <Panel title="바코드 검색" icon={<SearchIcon className="h-5 w-5" />}><div className="flex flex-col gap-3 md:flex-row"><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="바코드, 상품명, 축약명 검색" className="flex-1 rounded-2xl border border-[#d6e0ea] bg-white px-5 py-4 outline-none" /><button onClick={() => setQuery('')} className="rounded-2xl bg-[#edf4fb] px-5 py-4 font-semibold text-[#002542]">초기화</button></div></Panel>;
+function SearchPanel({
+  query,
+  setQuery,
+  onSearch,
+  onClear,
+  validationMessage,
+  searchEnabled,
+}: {
+  query: string;
+  setQuery: React.Dispatch<React.SetStateAction<string>>;
+  onSearch: () => void;
+  onClear: () => void;
+  validationMessage: string | null;
+  searchEnabled: boolean;
+}) {
+  return (
+    <Panel title="바코드 검색" icon={<SearchIcon className="h-5 w-5" />}>
+      <div className="flex flex-col gap-3 md:flex-row">
+        <input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter' && searchEnabled) onSearch();
+          }}
+          placeholder="바코드, 상품명, 축약명 검색"
+          className="flex-1 rounded-2xl border border-[#d6e0ea] bg-white px-5 py-4 outline-none"
+        />
+        <button
+          onClick={onSearch}
+          disabled={!searchEnabled}
+          className="rounded-2xl bg-[#002542] px-5 py-4 font-semibold text-white disabled:cursor-not-allowed disabled:opacity-60"
+        >
+          검색
+        </button>
+        <button onClick={onClear} className="rounded-2xl bg-[#edf4fb] px-5 py-4 font-semibold text-[#002542]">초기화</button>
+      </div>
+      {validationMessage && <p className="mt-3 text-sm text-[#8a5100]">{validationMessage}</p>}
+    </Panel>
+  );
 }
 
 function ScannerPanel(props: { videoRef: React.RefObject<HTMLVideoElement | null>; scannerEnabled: boolean; onToggleScanner: () => void; scanInput: string; setScanInput: React.Dispatch<React.SetStateAction<string>>; lastScanRaw: string; scanStatus: ScanStatus; scanFeedback: ScanFeedback; scanError: string | null; onClear: () => void }) {
   const overlayTone = props.scanFeedback === 'success' ? 'bg-[#1d6f42]/88 text-white' : 'bg-[#002542]/78 text-white';
   const overlayLabel = props.scanFeedback === 'success' ? '스캔성공' : '스캔중';
-  return <Panel title="QR / 바코드 스캐너" icon={<ScannerIcon className="h-5 w-5" />}><div className="grid grid-cols-1 gap-6 xl:grid-cols-[minmax(0,1fr)_20rem]"><div className="space-y-4"><div className="relative aspect-[4/3] overflow-hidden rounded-[2rem] border border-[#153049] bg-[#07131d]"><video ref={props.videoRef} className="h-full w-full object-cover" muted playsInline />{props.scannerEnabled && props.scanStatus === 'active' && <div className={`absolute left-1/2 top-4 -translate-x-1/2 rounded-full px-4 py-2 text-sm font-bold shadow-[0_10px_24px_rgba(0,0,0,0.25)] ${overlayTone}`}>{overlayLabel}</div>}{!props.scannerEnabled && <div className="absolute inset-0 flex items-center justify-center text-sm text-white/80">카메라를 켜면 스캔을 시작합니다.</div>}</div><div className="flex flex-wrap gap-3"><button onClick={props.onToggleScanner} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white">{props.scannerEnabled ? '카메라 끄기' : '카메라 활성화'}</button><button onClick={props.onClear} className="rounded-2xl bg-[#edf4fb] px-5 py-3 font-semibold text-[#002542]">재스캔</button></div></div><div className="space-y-4"><StatusCard scanStatus={props.scanStatus} scanFeedback={props.scanFeedback} scanError={props.scanError} /><InfoBox label="최근 스캔 원문" value={props.lastScanRaw || '-'} mono /><div className="rounded-[1.75rem] border border-[#dce6f0] bg-[#f8fbfd] p-5"><label className="text-sm text-[#5b6670]">직접 입력 / 보정</label><input value={props.scanInput} onChange={(event) => props.setScanInput(event.target.value)} placeholder="스캔값을 직접 입력할 수 있습니다." className="mt-3 w-full rounded-2xl border border-[#d6e0ea] bg-white px-4 py-3 outline-none" /></div></div></div></Panel>;
+  return <Panel title="QR / 바코드 스캐너" icon={<ScannerIcon className="h-5 w-5" />}><div className="grid grid-cols-1 gap-4 xl:grid-cols-[minmax(0,1fr)_16rem]"><div className="space-y-4"><div className="relative aspect-[4/3] overflow-hidden rounded-[2rem] border border-[#153049] bg-[#07131d]"><video ref={props.videoRef} className="h-full w-full object-cover" muted playsInline />{props.scannerEnabled && props.scanStatus === 'active' && <div className={`absolute left-1/2 top-4 -translate-x-1/2 rounded-full px-4 py-2 text-sm font-bold shadow-[0_10px_24px_rgba(0,0,0,0.25)] ${overlayTone}`}>{overlayLabel}</div>}{!props.scannerEnabled && <div className="absolute inset-0 flex items-center justify-center text-sm text-white/80">카메라를 켜면 스캔을 시작합니다.</div>}</div><div className="flex flex-wrap gap-3"><button onClick={props.onToggleScanner} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white">{props.scannerEnabled ? '카메라 끄기' : '카메라 활성화'}</button><button onClick={props.onClear} className="rounded-2xl bg-[#edf4fb] px-5 py-3 font-semibold text-[#002542]">재스캔</button></div></div><ScannerSummaryCard scanStatus={props.scanStatus} scanFeedback={props.scanFeedback} scanError={props.scanError} lastScanRaw={props.lastScanRaw} /></div></Panel>;
 }
 
 function BundlePanel(props: {
@@ -887,7 +941,7 @@ function MetricRow({ label, value }: { label: string; value: string }) {
   return <div className="flex items-center justify-between gap-3 border-b border-[#edf2f7] py-3 last:border-b-0"><span className="text-sm text-[#5b6670]">{label}</span><span className="text-right font-semibold text-[#171c1f]">{value}</span></div>;
 }
 
-function StatusCard({ scanStatus, scanFeedback, scanError }: { scanStatus: ScanStatus; scanFeedback: ScanFeedback; scanError: string | null }) {
+function ScannerSummaryCard({ scanStatus, scanFeedback, scanError, lastScanRaw }: { scanStatus: ScanStatus; scanFeedback: ScanFeedback; scanError: string | null; lastScanRaw: string }) {
   const tone = scanFeedback === 'success'
     ? 'bg-[#e8f7ec] text-[#005c29]'
     : scanStatus === 'active'
@@ -908,9 +962,20 @@ function StatusCard({ scanStatus, scanFeedback, scanError }: { scanStatus: ScanS
           : scanStatus === 'denied'
             ? '권한 필요'
             : scanStatus === 'error'
-              ? '카메라 오류'
+            ? '카메라 오류'
               : '대기 중';
-  return <div className="rounded-[1.75rem] border border-[#dce6f0] bg-[#f8fbfd] p-5"><div className="flex items-center justify-between gap-3"><span className="text-sm text-[#5b6670]">스캐너 상태</span><span className={`rounded-full px-3 py-1 text-xs font-bold ${tone}`}>{label}</span></div><p className="mt-3 text-sm leading-6 text-[#5b6670]">{scanError ?? '카메라를 켜면 QR 코드와 바코드를 읽습니다.'}</p></div>;
+  return (
+    <div className="rounded-[1.5rem] border border-[#dce6f0] bg-[#f8fbfd] p-4">
+      <div className="flex items-center justify-between gap-3">
+        <span className="text-sm text-[#5b6670]">스캐너</span>
+        <span className={`rounded-full px-3 py-1 text-xs font-bold ${tone}`}>{label}</span>
+      </div>
+      <div className="mt-3 rounded-2xl bg-white px-3 py-2">
+        <p className="text-[11px] font-semibold text-[#7a8791]">최근 스캔</p>
+        <p className="mt-1 break-all font-mono text-sm text-[#002542]">{lastScanRaw || '-'}</p>
+      </div>
+    </div>
+  );
 }
 
 function InfoBox({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
@@ -1001,6 +1066,23 @@ function validateBundleForm(form: BundleReportInput) {
   if (!form.itemName.trim()) return '낱개 상품명을 입력해 주세요.';
   if (new TextEncoder().encode(form.itemName.trim()).length > 30) return '낱개 상품명은 30byte 이하여야 합니다.';
   return null;
+}
+
+function getSearchValidation(value: string) {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return { canSearch: false, message: '검색어를 입력해 주세요.' };
+  }
+
+  if (/^\d+$/.test(trimmed)) {
+    return trimmed.length >= 5
+      ? { canSearch: true, message: null }
+      : { canSearch: false, message: '숫자 검색은 최소 5자리부터 가능합니다.' };
+  }
+
+  return new TextEncoder().encode(trimmed).length >= 6
+    ? { canSearch: true, message: null }
+    : { canSearch: false, message: '한글 또는 영문 검색은 최소 6byte부터 가능합니다.' };
 }
 
 function downloadBlob(blob: Blob, fileName: string) {

@@ -84,6 +84,12 @@ Accepted headers include practical variants such as:
 - added focus-related camera constraints to improve Android device behavior, including Galaxy S25 reports
 - persisted scanner preference so the next visit auto-attempts camera activation
 
+### Current Request Follow-up
+- scanner panel now stays fixed below the top header while scrolling through match results
+- product/barcode search now runs with an explicit `검색` button or Enter key
+- numeric search requires at least `5` digits
+- Korean/English text search requires at least `6byte`
+
 ### PWA
 - added installable app manifest
 - added service worker registration for production builds
