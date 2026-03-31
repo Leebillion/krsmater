@@ -1074,9 +1074,9 @@ function getSearchValidation(value: string) {
   }
 
   if (/^\d+$/.test(trimmed)) {
-    return trimmed.length >= 5
+    return trimmed.length >= 4
       ? { canSearch: true, message: null }
-      : { canSearch: false, message: '숫자 검색은 최소 5자리부터 가능합니다.' };
+      : { canSearch: false, message: '숫자 검색은 최소 4자리부터 가능합니다.' };
   }
 
   return new TextEncoder().encode(trimmed).length >= 6

@@ -87,8 +87,14 @@ Accepted headers include practical variants such as:
 ### Current Request Follow-up
 - scanner panel now stays fixed below the top header while scrolling through match results
 - product/barcode search now runs with an explicit `검색` button or Enter key
-- numeric search requires at least `5` digits
+- numeric search requires at least `4` digits
 - Korean/English text search requires at least `6byte`
+
+### Latest UI Adjustments
+- scanner panel sticky behavior was removed again so the scan area scrolls naturally with results
+- scanner now auto-attempts camera activation when the app opens
+- scanner status and last scan text were merged into a smaller summary card to save mobile space
+- direct manual correction input was removed from the scanner panel to prioritize result visibility
 
 ### PWA
 - added installable app manifest
