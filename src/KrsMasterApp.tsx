@@ -1,6 +1,6 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { BarcodePreview } from './components/BarcodePreview';
-import { BundleIcon, CheckCircleIcon, HistoryIcon, InfoIcon, InventoryIcon, ScannerIcon, SearchIcon, UploadIcon } from './components/Icons';
+import { BundleIcon, CheckCircleIcon, DescriptionIcon, HistoryIcon, InfoIcon, InventoryIcon, ScannerIcon, SearchIcon, UploadIcon } from './components/Icons';
 import {
   createBundleReport,
   deleteBundleReport,
@@ -17,10 +17,11 @@ import {
   uploadBundleMaster,
   uploadMasterToServer,
 } from './lib/api';
+import { parseConversionFile, type ConvertedBarcodeItem, type ConvertedBarcodeSummary } from './lib/converter';
 import { clearPersistedState, loadPersistedState, savePersistedState, type PersistedHistoryItem } from './lib/persistence';
 import { type BarcodeMatch, type MasterFileSummary, type MasterRecord, findBarcodeMatches, formatSimilarity, parseMasterFile } from './lib/master';
 
-type ViewMode = 'scanner' | 'search' | 'bundle' | 'import';
+type ViewMode = 'scanner' | 'search' | 'bundle' | 'import' | 'convert';
 type BundleTab = 'report' | 'reportStatus' | 'lookup';
 type ScanStatus = 'idle' | 'starting' | 'active' | 'unsupported' | 'denied' | 'error';
 type ScanFeedback = 'idle' | 'scanning' | 'success';
@@ -39,6 +40,7 @@ type AppDraftState = {
   submittedQuery: string;
   scanInput: string;
   bundleLookupQuery: string;
+  convertQuery: string;
   bundleForm: BundleReportInput;
   editingReportId: number | null;
   editingReportForm: BundleReportInput;
@@ -54,6 +56,7 @@ const navItems = [
   { id: 'scanner' as const, label: '스캐너', icon: <ScannerIcon /> },
   { id: 'search' as const, label: '검색', icon: <SearchIcon /> },
   { id: 'bundle' as const, label: '번들', icon: <BundleIcon /> },
+  { id: 'convert' as const, label: '변환', icon: <DescriptionIcon /> },
   { id: 'import' as const, label: '업로드', icon: <UploadIcon fill /> },
 ];
 const scannerPreferenceKey = 'krs-master-scanner-enabled';
@@ -73,6 +76,7 @@ const emptyAppDraft: AppDraftState = {
   submittedQuery: '',
   scanInput: '',
   bundleLookupQuery: '',
+  convertQuery: '',
   bundleForm: emptyBundleForm,
   editingReportId: null,
   editingReportForm: emptyBundleForm,
@@ -107,6 +111,12 @@ export default function KrsMasterApp() {
   const [bundleLookupItems, setBundleLookupItems] = useState<BundleMasterRecord[]>([]);
   const [bundleLookupBusy, setBundleLookupBusy] = useState(false);
   const [bundleLookupMessage, setBundleLookupMessage] = useState<string | null>('상품명 또는 바코드로 검색해 주세요.');
+  const [convertSummary, setConvertSummary] = useState<ConvertedBarcodeSummary | null>(null);
+  const [convertedItems, setConvertedItems] = useState<ConvertedBarcodeItem[]>([]);
+  const [convertBusy, setConvertBusy] = useState(false);
+  const [convertMessage, setConvertMessage] = useState<string | null>('엑셀 또는 CSV 파일을 올리면 바코드 리스트로 변환합니다.');
+  const [convertWarnings, setConvertWarnings] = useState<string[]>([]);
+  const [convertQuery, setConvertQuery] = useState('');
   const [bundleReportRows, setBundleReportRows] = useState<BundleReportRow[]>([]);
   const [bundleReportRowsBusy, setBundleReportRowsBusy] = useState(false);
   const [bundleReportRowsMessage, setBundleReportRowsMessage] = useState<string | null>(null);
@@ -115,6 +125,7 @@ export default function KrsMasterApp() {
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const bundleMasterInputRef = useRef<HTMLInputElement | null>(null);
+  const convertInputRef = useRef<HTMLInputElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -125,6 +136,11 @@ export default function KrsMasterApp() {
   const matches = useMemo(() => findBarcodeMatches(records, activeInput), [records, activeInput]);
   const exactMatch = matches.find((item) => item.matchType === 'exact');
   const similarMatches = exactMatch ? matches.filter((item) => item !== exactMatch) : matches;
+  const filteredConvertedItems = useMemo(() => {
+    const keyword = convertQuery.trim().toLowerCase();
+    if (!keyword) return convertedItems;
+    return convertedItems.filter((item) => item.barcode.toLowerCase().includes(keyword) || item.name.toLowerCase().includes(keyword));
+  }, [convertQuery, convertedItems]);
   const searchValidation = getSearchValidation(query);
   const searchEmptyMessage = view === 'scanner'
     ? '스캔 또는 직접 입력 결과를 기준으로 후보를 보여드립니다.'
@@ -168,12 +184,13 @@ export default function KrsMasterApp() {
       const storedDraft = window.localStorage.getItem(appDraftKey);
       if (storedDraft) {
         const draft = JSON.parse(storedDraft) as Partial<AppDraftState>;
-        if (draft.view === 'scanner' || draft.view === 'search' || draft.view === 'bundle' || draft.view === 'import') setView(draft.view);
+        if (draft.view === 'scanner' || draft.view === 'search' || draft.view === 'bundle' || draft.view === 'import' || draft.view === 'convert') setView(draft.view);
         if (draft.bundleTab === 'report' || draft.bundleTab === 'reportStatus' || draft.bundleTab === 'lookup') setBundleTab(draft.bundleTab);
         if (typeof draft.query === 'string') setQuery(draft.query);
         if (typeof draft.submittedQuery === 'string') setSubmittedQuery(draft.submittedQuery);
         if (typeof draft.scanInput === 'string') setScanInput(draft.scanInput);
         if (typeof draft.bundleLookupQuery === 'string') setBundleLookupQuery(draft.bundleLookupQuery);
+        if (typeof draft.convertQuery === 'string') setConvertQuery(draft.convertQuery);
         if (draft.bundleForm) setBundleForm({ ...emptyBundleForm, ...draft.bundleForm });
         if (typeof draft.editingReportId === 'number' || draft.editingReportId === null) setEditingReportId(draft.editingReportId);
         if (draft.editingReportForm) setEditingReportForm({ ...emptyBundleForm, ...draft.editingReportForm });
@@ -192,6 +209,7 @@ export default function KrsMasterApp() {
         submittedQuery,
         scanInput,
         bundleLookupQuery,
+        convertQuery,
         bundleForm,
         editingReportId,
         editingReportForm,
@@ -200,7 +218,7 @@ export default function KrsMasterApp() {
     } catch {
       // Ignore draft persistence failures.
     }
-  }, [view, bundleTab, query, submittedQuery, scanInput, bundleLookupQuery, bundleForm, editingReportId, editingReportForm]);
+  }, [view, bundleTab, query, submittedQuery, scanInput, bundleLookupQuery, convertQuery, bundleForm, editingReportId, editingReportForm]);
 
   useEffect(() => {
     const handleUpdateReady = () => setUpdateBanner('updateReady');
@@ -521,6 +539,29 @@ export default function KrsMasterApp() {
     }
   };
 
+  const convertFileToBarcodeList = async (file: File) => {
+    try {
+      setConvertBusy(true);
+      setConvertMessage(null);
+      const result = await parseConversionFile(file);
+      setConvertedItems(result.items);
+      setConvertSummary(result.summary);
+      setConvertWarnings(result.warnings);
+      setConvertQuery('');
+      setConvertMessage(
+        `${result.summary.recordCount.toLocaleString()}건을 바코드 리스트로 변환했습니다.${result.warnings.length ? ` 제외 ${result.warnings.length.toLocaleString()}건` : ''}`,
+      );
+      setView('convert');
+    } catch (error) {
+      setConvertedItems([]);
+      setConvertSummary(null);
+      setConvertWarnings([]);
+      setConvertMessage(error instanceof Error ? error.message : '파일 변환에 실패했습니다.');
+    } finally {
+      setConvertBusy(false);
+    }
+  };
+
   const startEditBundleReport = (row: BundleReportRow) => {
     setEditingReportId(row.id);
     setEditingReportForm({
@@ -615,6 +656,7 @@ export default function KrsMasterApp() {
           {view === 'search' && <SearchPanel query={query} setQuery={setQuery} onSearch={runSearch} onClear={() => { setQuery(''); setSubmittedQuery(''); }} validationMessage={searchValidation.message} searchEnabled={searchValidation.canSearch} />}
           {view === 'import' && <ImportPanel inputRef={inputRef} uploading={uploading} uploadMessage={uploadMessage} onChoose={() => inputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await saveMasterFile(file); event.target.value = ''; }} />}
           {view === 'bundle' && <BundlePanel bundleTab={bundleTab} setBundleTab={setBundleTab} onOpenReportStatus={() => void openBundleReportStatus()} bundleForm={bundleForm} setBundleForm={setBundleForm} bundleReportBusy={bundleReportBusy} bundleReportMessage={bundleReportMessage} onSave={saveBundleReport} onDownload={downloadBundleDb} bundleReportRows={bundleReportRows} bundleReportRowsBusy={bundleReportRowsBusy} bundleReportRowsMessage={bundleReportRowsMessage} editingReportId={editingReportId} editingReportForm={editingReportForm} setEditingReportForm={setEditingReportForm} onRefreshReportRows={() => void loadBundleReportRows()} onStartEdit={startEditBundleReport} onCancelEdit={cancelEditBundleReport} onSaveEdit={() => void saveEditedBundleReport()} onDelete={(id) => void removeBundleReport(id)} bundleMasterInputRef={bundleMasterInputRef} bundleMasterBusy={bundleMasterBusy} bundleMasterMessage={bundleMasterMessage} bundleMasterSummary={bundleMasterSummary} onPickBundleMaster={() => bundleMasterInputRef.current?.click()} onBundleMasterFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await uploadBundleMasterFile(file); event.target.value = ''; }} bundleLookupQuery={bundleLookupQuery} setBundleLookupQuery={setBundleLookupQuery} bundleLookupItems={bundleLookupItems} bundleLookupBusy={bundleLookupBusy} bundleLookupMessage={bundleLookupMessage} onLookup={() => void loadBundleLookup(bundleLookupQuery)} />}
+          {view === 'convert' && <ConvertPanel inputRef={convertInputRef} busy={convertBusy} message={convertMessage} summary={convertSummary} items={filteredConvertedItems} totalItems={convertedItems.length} warnings={convertWarnings} query={convertQuery} setQuery={setConvertQuery} onChoose={() => convertInputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertFileToBarcodeList(file); event.target.value = ''; }} />}
           {(view === 'scanner' || view === 'search') && <MatchSection exactMatch={exactMatch} similarMatches={similarMatches} emptyMessage={searchEmptyMessage} />}
         </div>
         <aside className="space-y-6">
@@ -623,6 +665,9 @@ export default function KrsMasterApp() {
           </Panel>
           <Panel title="번들 마스터" icon={<BundleIcon className="h-5 w-5" />}>
             {bundleMasterSummary ? <><MetricRow label="파일명" value={bundleMasterSummary.fileName} /><MetricRow label="레코드" value={`${bundleMasterSummary.recordCount.toLocaleString()}건`} /><MetricRow label="업로드 시각" value={formatDate(bundleMasterSummary.importedAt)} /></> : <p className="text-sm text-[#5b6670]">번들 마스터가 아직 없습니다.</p>}
+          </Panel>
+          <Panel title="변환 현황" icon={<DescriptionIcon className="h-5 w-5" />}>
+            {convertSummary ? <><MetricRow label="파일명" value={convertSummary.fileName} /><MetricRow label="변환 건수" value={`${convertSummary.recordCount.toLocaleString()}건`} /><MetricRow label="제외 행" value={`${convertSummary.skippedRows.toLocaleString()}건`} /><MetricRow label="변환 시각" value={formatDate(convertSummary.importedAt)} /></> : <p className="text-sm text-[#5b6670]">아직 변환한 파일이 없습니다.</p>}
           </Panel>
           <Panel title="최근 업로드" icon={<HistoryIcon className="h-5 w-5" />}>
             {history.length === 0 ? <p className="text-sm text-[#5b6670]">업로드 기록이 없습니다.</p> : history.map((item) => <div key={item.id}><ImportHistory item={item} /></div>)}
@@ -678,6 +723,55 @@ function SearchPanel({
       </div>
       {validationMessage && <p className="mt-3 text-sm text-[#8a5100]">{validationMessage}</p>}
     </Panel>
+  );
+}
+
+function ConvertPanel(props: {
+  inputRef: React.RefObject<HTMLInputElement | null>;
+  busy: boolean;
+  message: string | null;
+  summary: ConvertedBarcodeSummary | null;
+  items: ConvertedBarcodeItem[];
+  totalItems: number;
+  warnings: string[];
+  query: string;
+  setQuery: React.Dispatch<React.SetStateAction<string>>;
+  onChoose: () => void;
+  onFile: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
+}) {
+  return (
+    <section className="space-y-6">
+      <Panel title="바코드 변환" icon={<DescriptionIcon className="h-5 w-5" />}>
+        <input ref={props.inputRef} type="file" accept=".xlsx,.xls,.csv,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" onChange={props.onFile} />
+        <div className="flex flex-col gap-4 rounded-[2rem] border border-dashed border-[#9eb3c7] bg-[#f0f4f8] p-6 md:flex-row md:items-center md:justify-between">
+          <div>
+            <p className="text-lg font-bold text-[#171c1f]">엑셀 / CSV를 바코드 리스트로 변환</p>
+            <p className="mt-2 text-sm text-[#5b6670]">헤더는 상품코드, 상품명 형식으로 올려 주세요.</p>
+          </div>
+          <button onClick={props.onChoose} disabled={props.busy} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white disabled:opacity-60">파일 선택</button>
+        </div>
+        {props.message && <div className="mt-4 rounded-[1.5rem] border border-[#dce6f0] bg-[#f8fbfd] p-4 text-sm text-[#5b6670]">{props.busy ? '파일 변환 중...' : props.message}</div>}
+      </Panel>
+
+      <section className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+        <Panel title="변환 결과" icon={<CheckCircleIcon className="h-5 w-5" />}>
+          <input value={props.query} onChange={(event) => props.setQuery(event.target.value)} placeholder="상품명 또는 바코드 필터" className="w-full rounded-2xl border border-[#d6e0ea] bg-white px-5 py-4 outline-none" />
+          {props.summary && <p className="mt-4 text-sm text-[#5b6670]">{props.summary.fileName} / {props.items.length.toLocaleString()}건 표시 중 / 전체 {props.totalItems.toLocaleString()}건</p>}
+          <div className="mt-6 space-y-4">
+            {!props.busy && props.items.length === 0 && <div className="rounded-[1.5rem] border border-[#dce6f0] bg-[#f8fbfd] p-5 text-sm text-[#5b6670]">{props.totalItems === 0 ? '변환된 데이터가 없습니다.' : '필터 결과가 없습니다.'}</div>}
+            {props.items.map((item) => <div key={`${item.rowNumber}-${item.barcode}`}><ConvertedBarcodeCard item={item} /></div>)}
+          </div>
+        </Panel>
+
+        <Panel title="변환 기준" icon={<InfoIcon className="h-5 w-5" />}>
+          <MetricRow label="입력 헤더" value="상품코드 / 상품명" />
+          <MetricRow label="출력 값" value="바코드 / 상품명" />
+          <MetricRow label="지원 형식" value="xlsx, xls, csv" />
+          <MetricRow label="제외 기준" value="빈 상품코드 또는 상품명" />
+          {props.warnings.length > 0 && <p className="mt-4 whitespace-pre-line text-sm text-[#8a5100]">{props.warnings.slice(0, 10).join('\n')}{props.warnings.length > 10 ? `\n외 ${props.warnings.length - 10}건` : ''}</p>}
+        </Panel>
+      </section>
+    </section>
   );
 }
 
@@ -858,6 +952,10 @@ function MatchCard({ match, emphasize = false }: { match: BarcodeMatch; emphasiz
 
 function BundleCard({ item }: { item: BundleMasterRecord }) {
   return <div className="rounded-[1.5rem] border border-[#dce6f0] bg-[#f8fbfd] p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-lg font-bold text-[#171c1f]">{item.bundleName}</p><p className="mt-1 font-mono text-sm text-[#002542]">번들 {item.bundleBarcode}</p></div><span className="rounded-full bg-[#d1e4ff] px-3 py-1 text-xs font-bold text-[#002542]">입수 {item.quantity}</span></div><div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2"><InfoBox label="낱개 바코드" value={item.itemBarcode} mono /><InfoBox label="낱개 상품명" value={item.itemName} /></div></div>;
+}
+
+function ConvertedBarcodeCard({ item }: { item: ConvertedBarcodeItem }) {
+  return <div className="rounded-[1.5rem] border border-[#dce6f0] bg-[#f8fbfd] p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-mono text-lg font-bold text-[#002542]">{item.barcode}</p><p className="mt-2 text-lg font-bold text-[#171c1f]">{item.name}</p></div><span className="rounded-full bg-[#edf4fb] px-3 py-1 text-xs font-bold text-[#002542]">{item.rowNumber}행</span></div><div className="mt-4"><BarcodePreview value={item.barcode} /></div></div>;
 }
 
 function BundleReportStatusCard(props: {

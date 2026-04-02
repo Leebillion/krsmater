@@ -33,7 +33,7 @@ export function BarcodePreview({ value }: BarcodePreviewProps) {
   if (!config.supported) {
     return (
       <div className="rounded-2xl border border-[#dce6f0] bg-white p-4 text-center text-sm text-[#5b6670]">
-        바코드 생성 불가: 숫자/문자 형식이 지원되지 않습니다.
+        바코드를 생성할 수 없습니다. 숫자 또는 영문 형식을 확인해 주세요.
       </div>
     );
   }

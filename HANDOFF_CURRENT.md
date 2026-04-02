@@ -5,8 +5,9 @@ KRS Master currently includes:
 
 - shared server-side master sync with Express + SQLite
 - local browser cache restore on startup
-- scanner / search / bundle / upload navigation
+- scanner / search / bundle / convert / upload navigation
 - bundle reporting, bundle report status management, and bundle master lookup
+- excel/csv barcode conversion list from `상품코드` / `상품명`
 - live QR/barcode scanner status overlay and result feedback
 - installable PWA shell with manifest and service worker registration
 - update-ready banner and local draft restore for safer refreshes
@@ -77,6 +78,13 @@ Accepted headers include practical variants such as:
 
 ## Recent Fixes
 
+### Convert Menu
+- added a new main menu tab `변환`
+- `변환` accepts `.xlsx`, `.xls`, `.csv`
+- expected headers are `상품코드`, `상품명`
+- converted output renders as `바코드`, `상품명` cards with visible barcode previews
+- rows missing either code or name are skipped with warning messages
+
 ### Scanner UX
 - changed scanner CTA text from `카메라 켜기` to `카메라 활성화`
 - changed scanner reset text from `초기화` to `재스캔`
@@ -129,8 +137,10 @@ Fix:
 
 ## Main Files Updated In This Phase
 - `src/KrsMasterApp.tsx`
+- `src/lib/converter.ts`
 - `src/main.tsx`
 - `src/lib/api.ts`
+- `src/components/BarcodePreview.tsx`
 - `src/components/Icons.tsx`
 - `server/index.js`
 - `server/db.js`

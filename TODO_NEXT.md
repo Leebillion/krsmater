@@ -98,7 +98,20 @@ Expected result:
 
 ## Medium Priority
 
-### 6. Expand parser for real-world file variants
+### 6. Validate convert-tab real files
+Reason:
+- new `변환` tab assumes headers `상품코드`, `상품명`
+- Excel source files may still contain numeric cells, spaces, or leading-zero edge cases
+
+Actions:
+- test with real `.xlsx` and `.csv` samples
+- verify leading `0` preservation from source files
+- decide whether alias headers or export/download output is also needed
+
+Expected result:
+- conversion works reliably with real operator files
+
+### 7. Expand parser for real-world file variants
 Reason:
 - field assumptions may differ by actual source files
 - `.dat`, `.mst`, `.csv` are selectable but parser is still fixed-width oriented first
@@ -112,7 +125,7 @@ Actions:
 Expected result:
 - import succeeds for actual production file variants
 
-### 7. Decide whether tap-to-focus or torch UI is needed
+### 8. Decide whether tap-to-focus or torch UI is needed
 Reason:
 - some Android devices may still need extra camera assistance beyond current constraints
 
@@ -124,7 +137,7 @@ Actions:
 Expected result:
 - more reliable scanning on difficult mobile hardware
 
-### 8. Harden PWA update UX
+### 9. Harden PWA update UX
 Reason:
 - service worker caching is now enabled
 - update and cache invalidation behavior should be verified in production
