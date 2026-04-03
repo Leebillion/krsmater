@@ -217,3 +217,10 @@ curl http://localhost:3100/api/bundles/report
 - OCR result actions now include total count, temporary save, delete, and excel download
 - barcode preview is intended for follow-up smartphone scanning and quantity entry workflow
 - server-side OCR currently uses Python + OpenCV + pytesseract with local `server/tessdata`
+
+## Latest Update Note 4
+- convert result cards now show `마스터 일치` / `마스터 불일치` using the active product master
+- when a convert result barcode matches the master, the matched master product name is also displayed
+- photo OCR upload now accepts scanned PDF files in addition to images and mobile camera captures
+- PDF pages are rendered server-side and passed through the same OCR extraction flow as images
+- root `requirements.txt` now includes both `pillow-heif` and `pypdfium2` for HEIC and PDF support

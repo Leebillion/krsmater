@@ -922,13 +922,13 @@ function ConvertPanel(props: {
   return (
     <section className="space-y-6">
       <Panel title="재고현황 표 사진 변환" icon={<DescriptionIcon className="h-5 w-5" />}>
-        <input ref={props.photoInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={props.onPhotoFile} />
-        <input ref={props.photoGalleryInputRef} type="file" accept="image/*" className="hidden" onChange={props.onPhotoFile} />
+        <input ref={props.photoInputRef} type="file" accept="image/*,application/pdf,.pdf" capture="environment" className="hidden" onChange={props.onPhotoFile} />
+        <input ref={props.photoGalleryInputRef} type="file" accept="image/*,application/pdf,.pdf" className="hidden" onChange={props.onPhotoFile} />
         <div className="flex flex-col gap-4 rounded-[2rem] border border-dashed border-[#9eb3c7] bg-[#f0f4f8] p-6">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
               <p className="text-lg font-bold text-[#171c1f]">휴대폰 카메라로 재고현황 표 추출</p>
-              <p className="mt-2 text-sm text-[#5b6670]">사진 촬영 또는 앨범의 기존 사진 선택 후 상품코드 / 상품명 2열을 추출합니다.</p>
+              <p className="mt-2 text-sm text-[#5b6670]">사진, 저장된 이미지, 스캔 PDF를 올려 상품코드 / 상품명 2열을 추출합니다.</p>
             </div>
             <div className="flex flex-wrap gap-3">
               <button onClick={props.onChoosePhoto} disabled={props.photoBusy} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white disabled:opacity-60">카메라 촬영</button>
@@ -937,7 +937,7 @@ function ConvertPanel(props: {
           </div>
           <div className="grid grid-cols-1 gap-3 text-sm text-[#5b6670] md:grid-cols-2">
             <div className="rounded-[1.25rem] bg-white px-4 py-3">문서 영역 자동 보정 후 OCR</div>
-            <div className="rounded-[1.25rem] bg-white px-4 py-3">촬영 사진과 저장된 사진 모두 선택 가능</div>
+            <div className="rounded-[1.25rem] bg-white px-4 py-3">촬영 사진, 저장 사진, PDF 업로드 가능</div>
             <div className="rounded-[1.25rem] bg-white px-4 py-3 md:col-span-2">추출 결과는 셀 단위로 수정 가능</div>
           </div>
         </div>
@@ -980,7 +980,7 @@ function ConvertPanel(props: {
         </Panel>
 
         <Panel title="사진 변환 기준" icon={<InfoIcon className="h-5 w-5" />}>
-          <MetricRow label="입력 방식" value="이미지 업로드 / 모바일 촬영" />
+          <MetricRow label="입력 방식" value="이미지 업로드 / 모바일 촬영 / PDF" />
           <MetricRow label="OCR 언어" value="한국어 + 영문" />
           <MetricRow label="추출 열" value="상품코드 / 상품명" />
           <MetricRow label="다운로드" value="날짜 기반 xlsx" />
@@ -1006,7 +1006,7 @@ function ConvertPanel(props: {
           {props.summary && <p className="mt-4 text-sm text-[#5b6670]">{props.summary.fileName} / {props.items.length.toLocaleString()}건 표시 중 / 전체 {props.totalItems.toLocaleString()}건</p>}
           <div className="mt-6 space-y-4">
             {!props.busy && props.items.length === 0 && <div className="rounded-[1.5rem] border border-[#dce6f0] bg-[#f8fbfd] p-5 text-sm text-[#5b6670]">{props.totalItems === 0 ? '변환된 데이터가 없습니다.' : '필터 결과가 없습니다.'}</div>}
-            {props.items.map((item) => <div key={`${item.rowNumber}-${item.barcode}`}><ConvertedBarcodeCard item={item} /></div>)}
+            {props.items.map((item) => <div key={`${item.rowNumber}-${item.barcode}`}><ConvertedBarcodeCard item={item} masterName={props.masterRecordByBarcode.get(item.barcode)?.name ?? null} /></div>)}
           </div>
         </Panel>
 
@@ -1201,8 +1201,8 @@ function BundleCard({ item }: { item: BundleMasterRecord }) {
   return <div className="rounded-[1.5rem] border border-[#dce6f0] bg-[#f8fbfd] p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-lg font-bold text-[#171c1f]">{item.bundleName}</p><p className="mt-1 font-mono text-sm text-[#002542]">번들 {item.bundleBarcode}</p></div><span className="rounded-full bg-[#d1e4ff] px-3 py-1 text-xs font-bold text-[#002542]">입수 {item.quantity}</span></div><div className="mt-4 grid grid-cols-1 gap-3 md:grid-cols-2"><InfoBox label="낱개 바코드" value={item.itemBarcode} mono /><InfoBox label="낱개 상품명" value={item.itemName} /></div></div>;
 }
 
-function ConvertedBarcodeCard({ item }: { item: ConvertedBarcodeItem }) {
-  return <div className="rounded-[1.5rem] border border-[#dce6f0] bg-[#f8fbfd] p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-mono text-lg font-bold text-[#002542]">{item.barcode}</p><p className="mt-2 text-lg font-bold text-[#171c1f]">{item.name}</p></div><span className="rounded-full bg-[#edf4fb] px-3 py-1 text-xs font-bold text-[#002542]">{item.rowNumber}행</span></div><div className="mt-4"><BarcodePreview value={item.barcode} /></div></div>;
+function ConvertedBarcodeCard({ item, masterName }: { item: ConvertedBarcodeItem; masterName: string | null }) {
+  return <div className="rounded-[1.5rem] border border-[#dce6f0] bg-[#f8fbfd] p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-mono text-lg font-bold text-[#002542]">{item.barcode}</p><div className="mt-2 flex flex-wrap items-center gap-2"><span className={`rounded-full px-3 py-1 text-xs font-bold ${masterName ? 'bg-[#dff3e3] text-[#005c29]' : 'bg-[#ffe7e5] text-[#93000a]'}`}>{masterName ? '마스터 일치' : '마스터 불일치'}</span>{masterName && <span className="text-sm text-[#5b6670]">마스터명 {masterName}</span>}</div><p className="mt-3 text-lg font-bold text-[#171c1f]">{item.name}</p></div><span className="rounded-full bg-[#edf4fb] px-3 py-1 text-xs font-bold text-[#002542]">{item.rowNumber}행</span></div><div className="mt-4"><BarcodePreview value={item.barcode} /></div></div>;
 }
 
 function PhotoOcrCard(props: {

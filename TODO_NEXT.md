@@ -195,3 +195,8 @@ Before next release:
 - deployment/server owners should run `python3 -m pip install -r requirements.txt`
 - if OCR still fails in production, check Ubuntu system packages for Tesseract and image libs before changing frontend code
 - after server dependency install, verify both `카메라 촬영` and `기존 사진 선택` on iPhone Safari
+
+## Latest Update Note 4
+- after server dependency install, verify scanned PDF upload under the photo OCR panel
+- confirm multi-page PDF behavior and whether merged OCR rows should stay barcode-deduped or page-grouped
+- verify convert result cards show correct master match labels with a recently uploaded product master

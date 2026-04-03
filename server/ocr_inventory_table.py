@@ -9,6 +9,7 @@ import cv2
 import numpy as np
 import pytesseract
 from PIL import Image
+import pypdfium2 as pdfium
 
 try:
     from pillow_heif import register_heif_opener
@@ -56,13 +57,12 @@ def main() -> int:
 
     configure_tesseract()
 
-    image = load_image(image_path)
-    if image is None:
+    images = load_images(image_path)
+    if not images:
         print(json.dumps({"error": "image decode failed"}, ensure_ascii=False))
         return 1
 
-    corrected = deskew_document(image)
-    rows, warnings = best_ocr_result(corrected)
+    rows, warnings = run_ocr_for_images(images)
 
     print(json.dumps({"ok": True, "items": rows, "warnings": warnings}, ensure_ascii=False))
     return 0
@@ -79,7 +79,16 @@ def configure_tesseract() -> None:
         os.environ["TESSDATA_PREFIX"] = str(tessdata_dir)
 
 
-def load_image(image_path: Path) -> np.ndarray | None:
+def load_images(image_path: Path) -> list[np.ndarray]:
+    suffix = image_path.suffix.lower()
+    if suffix == ".pdf":
+        return load_pdf_pages(image_path)
+
+    image = load_single_image(image_path)
+    return [image] if image is not None else []
+
+
+def load_single_image(image_path: Path) -> np.ndarray | None:
     image = cv2.imdecode(np.fromfile(str(image_path), dtype=np.uint8), cv2.IMREAD_COLOR)
     if image is not None:
         return image
@@ -98,6 +107,41 @@ def load_image(image_path: Path) -> np.ndarray | None:
         image_array = np.array(rgb_image)
 
     return cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
+
+
+def load_pdf_pages(pdf_path: Path) -> list[np.ndarray]:
+    document = pdfium.PdfDocument(str(pdf_path))
+    images: list[np.ndarray] = []
+
+    try:
+        for page_index in range(len(document)):
+            page = document[page_index]
+            bitmap = page.render(scale=2.2)
+            pil_image = bitmap.to_pil().convert("RGB")
+            image_array = np.array(pil_image)
+            images.append(cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR))
+    finally:
+        document.close()
+
+    return images
+
+
+def run_ocr_for_images(images: list[np.ndarray]) -> tuple[list[dict], list[str]]:
+    all_rows: list[dict] = []
+    warnings: list[str] = []
+
+    for page_index, image in enumerate(images, start=1):
+        corrected = deskew_document(image)
+        page_rows, page_warnings = best_ocr_result(corrected)
+        all_rows.extend(page_rows)
+        warnings.extend(
+            [f"{page_index}페이지: {warning}" for warning in page_warnings]
+            if len(images) > 1
+            else page_warnings
+        )
+
+    merged_rows = reindex_rows(merge_rows_by_barcode(all_rows))
+    return merged_rows, dedupe_warnings(warnings)
 
 
 def deskew_document(image: np.ndarray) -> np.ndarray:
@@ -171,14 +215,7 @@ def order_points(points: np.ndarray) -> np.ndarray:
 
 
 def best_ocr_result(image: np.ndarray) -> tuple[list[dict], list[str]]:
-    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
-    variants = [
-      ("base", image),
-      ("rot_cw", cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)),
-      ("rot_ccw", cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE)),
-      ("rot_180", cv2.rotate(image, cv2.ROTATE_180)),
-      ("gray", cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)),
-    ]
+    variants = build_ocr_variants(image)
 
     best_rows: list[dict] = []
     best_warnings: list[str] = ["OCR 결과가 없습니다."]
@@ -206,6 +243,92 @@ def best_ocr_result(image: np.ndarray) -> tuple[list[dict], list[str]]:
         warnings.append("일부 행은 OCR 품질 문제로 누락되거나 불완전할 수 있어 표에서 직접 수정이 필요합니다.")
 
     return reindex_rows(merged_rows), warnings
+
+
+def build_ocr_variants(image: np.ndarray) -> list[tuple[str, np.ndarray]]:
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    variants: list[tuple[str, np.ndarray]] = [
+        ("base", image),
+        ("rot_cw", cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)),
+        ("rot_ccw", cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE)),
+        ("rot_180", cv2.rotate(image, cv2.ROTATE_180)),
+        ("gray", cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)),
+    ]
+
+    for variant_name, variant_image in list(variants[:4]):
+        focused = build_column_focus_variants(variant_image)
+        for focus_name, focus_image in focused:
+            variants.append((f"{variant_name}_{focus_name}", focus_image))
+
+    return variants
+
+
+def build_column_focus_variants(image: np.ndarray) -> list[tuple[str, np.ndarray]]:
+    content = crop_to_content_bounds(image)
+    variants: list[tuple[str, np.ndarray]] = []
+    sources = [("content", content)] if content is not None else []
+    if content is None:
+        sources.append(("full", image))
+
+    for source_name, source_image in sources:
+        height, width = source_image.shape[:2]
+        if width < 200 or height < 200:
+            continue
+
+        for ratio in (0.52, 0.62, 0.72):
+            crop_width = int(width * ratio)
+            if crop_width < 160:
+                continue
+
+            crop = source_image[:, :crop_width]
+            variants.append((f"{source_name}_left_{int(ratio * 100)}", upscale_for_ocr(crop)))
+
+        mid_start = int(width * 0.06)
+        mid_end = int(width * 0.72)
+        if mid_end - mid_start >= 160:
+            mid_crop = source_image[:, mid_start:mid_end]
+            variants.append((f"{source_name}_mid", upscale_for_ocr(mid_crop)))
+
+    return variants
+
+
+def crop_to_content_bounds(image: np.ndarray) -> np.ndarray | None:
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    threshold = cv2.adaptiveThreshold(
+        gray,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV,
+        31,
+        11,
+    )
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (9, 9))
+    merged = cv2.dilate(threshold, kernel, iterations=2)
+    points = cv2.findNonZero(merged)
+    if points is None:
+        return None
+
+    x, y, w, h = cv2.boundingRect(points)
+    image_height, image_width = image.shape[:2]
+    if w < image_width * 0.18 or h < image_height * 0.18:
+        return None
+
+    pad_x = max(16, int(w * 0.06))
+    pad_y = max(16, int(h * 0.06))
+    left = max(0, x - pad_x)
+    top = max(0, y - pad_y)
+    right = min(image_width, x + w + pad_x)
+    bottom = min(image_height, y + h + pad_y)
+    return image[top:bottom, left:right]
+
+
+def upscale_for_ocr(image: np.ndarray, target_width: int = 1600) -> np.ndarray:
+    height, width = image.shape[:2]
+    if width >= target_width:
+        return image
+
+    scale = target_width / float(width)
+    return cv2.resize(image, (target_width, int(height * scale)), interpolation=cv2.INTER_CUBIC)
 
 
 def score_rows(rows: list[dict]) -> int:
@@ -419,6 +542,10 @@ def reindex_rows(rows: list[dict]) -> list[dict]:
     for index, row in enumerate(ordered, start=1):
         row["rowNumber"] = index
     return ordered
+
+
+def dedupe_warnings(warnings: list[str]) -> list[str]:
+    return list(dict.fromkeys(warnings))
 
 
 if __name__ == "__main__":
