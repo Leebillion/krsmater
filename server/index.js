@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import cors from 'cors';
 import express from 'express';
 import { execFile } from 'child_process';
@@ -22,6 +23,7 @@ import {
   updateBundleReport,
 } from './db.js';
 import { findBarcodeMatches, parseMasterBuffer } from './masterParser.js';
+import { assertPythonCommand, findPythonCandidatesFromWhere, formatPythonAttempt } from './pythonResolver.js';
 
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
@@ -460,7 +462,10 @@ function sanitizeFileName(value) {
 
 async function resolvePythonCommand() {
   if (!resolvedPythonCommandPromise) {
-    resolvedPythonCommandPromise = findPythonCommand();
+    resolvedPythonCommandPromise = findPythonCommand().catch((error) => {
+      resolvedPythonCommandPromise = null;
+      throw error;
+    });
   }
   return resolvedPythonCommandPromise;
 }
@@ -474,20 +479,18 @@ async function findPythonCommand() {
     path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python310', 'python.exe'),
     path.join('C:', 'Program Files', 'Python313', 'python.exe'),
     path.join('C:', 'Program Files', 'Python310', 'python.exe'),
+    ...(await findPythonCandidatesFromWhere()),
   ].filter(Boolean);
 
-  for (const candidate of candidates) {
-    try {
-      if (candidate.endsWith('.exe')) {
-        await fs.access(candidate);
-        return candidate;
-      }
+  const dedupedCandidates = [...new Set(candidates)];
+  const attempted = [];
 
-      const args = candidate === 'py' ? ['-3', '--version'] : ['--version'];
-      await execFileAsync(candidate, args, { timeout: 5000 });
+  for (const candidate of dedupedCandidates) {
+    try {
+      await assertPythonCommand(candidate);
       return candidate;
-    } catch {
-      // Try next candidate.
+    } catch (error) {
+      attempted.push(formatPythonAttempt(candidate, error));
     }
   }
 

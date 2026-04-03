@@ -146,6 +146,7 @@ export default function KrsMasterApp() {
   const bundleMasterInputRef = useRef<HTMLInputElement | null>(null);
   const convertInputRef = useRef<HTMLInputElement | null>(null);
   const photoInputRef = useRef<HTMLInputElement | null>(null);
+  const photoGalleryInputRef = useRef<HTMLInputElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -810,7 +811,7 @@ export default function KrsMasterApp() {
           {view === 'search' && <SearchPanel query={query} setQuery={setQuery} onSearch={runSearch} onClear={() => { setQuery(''); setSubmittedQuery(''); }} validationMessage={searchValidation.message} searchEnabled={searchValidation.canSearch} />}
           {view === 'import' && <ImportPanel inputRef={inputRef} uploading={uploading} uploadMessage={uploadMessage} onChoose={() => inputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await saveMasterFile(file); event.target.value = ''; }} />}
           {view === 'bundle' && <BundlePanel bundleTab={bundleTab} setBundleTab={setBundleTab} onOpenReportStatus={() => void openBundleReportStatus()} bundleForm={bundleForm} setBundleForm={setBundleForm} bundleReportBusy={bundleReportBusy} bundleReportMessage={bundleReportMessage} onSave={saveBundleReport} onDownload={downloadBundleDb} bundleReportRows={bundleReportRows} bundleReportRowsBusy={bundleReportRowsBusy} bundleReportRowsMessage={bundleReportRowsMessage} editingReportId={editingReportId} editingReportForm={editingReportForm} setEditingReportForm={setEditingReportForm} onRefreshReportRows={() => void loadBundleReportRows()} onStartEdit={startEditBundleReport} onCancelEdit={cancelEditBundleReport} onSaveEdit={() => void saveEditedBundleReport()} onDelete={(id) => void removeBundleReport(id)} bundleMasterInputRef={bundleMasterInputRef} bundleMasterBusy={bundleMasterBusy} bundleMasterMessage={bundleMasterMessage} bundleMasterSummary={bundleMasterSummary} onPickBundleMaster={() => bundleMasterInputRef.current?.click()} onBundleMasterFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await uploadBundleMasterFile(file); event.target.value = ''; }} bundleLookupQuery={bundleLookupQuery} setBundleLookupQuery={setBundleLookupQuery} bundleLookupItems={bundleLookupItems} bundleLookupBusy={bundleLookupBusy} bundleLookupMessage={bundleLookupMessage} onLookup={() => void loadBundleLookup(bundleLookupQuery)} />}
-          {view === 'convert' && <ConvertPanel inputRef={convertInputRef} busy={convertBusy} message={convertMessage} summary={convertSummary} items={filteredConvertedItems} totalItems={convertedItems.length} warnings={convertWarnings} query={convertQuery} setQuery={setConvertQuery} onChoose={() => convertInputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertFileToBarcodeList(file); event.target.value = ''; }} photoInputRef={photoInputRef} photoBusy={photoBusy} photoMessage={photoMessage} photoSummary={photoSummary} photoRows={photoRows} photoWarnings={photoWarnings} onChoosePhoto={() => photoInputRef.current?.click()} onPhotoFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertInventoryPhoto(file); event.target.value = ''; }} onChangePhotoRow={updatePhotoRow} onDownloadPhotoRows={downloadPhotoRowsAsExcel} onSavePhotoRows={savePhotoRowsToDevice} onClearPhotoRows={clearSavedPhotoRows} photoSaveBusy={photoSaveBusy} photoProgress={photoProgress} masterRecordByBarcode={masterRecordByBarcode} />}
+          {view === 'convert' && <ConvertPanel inputRef={convertInputRef} busy={convertBusy} message={convertMessage} summary={convertSummary} items={filteredConvertedItems} totalItems={convertedItems.length} warnings={convertWarnings} query={convertQuery} setQuery={setConvertQuery} onChoose={() => convertInputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertFileToBarcodeList(file); event.target.value = ''; }} photoInputRef={photoInputRef} photoGalleryInputRef={photoGalleryInputRef} photoBusy={photoBusy} photoMessage={photoMessage} photoSummary={photoSummary} photoRows={photoRows} photoWarnings={photoWarnings} onChoosePhoto={() => photoInputRef.current?.click()} onChoosePhotoFromLibrary={() => photoGalleryInputRef.current?.click()} onPhotoFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertInventoryPhoto(file); event.target.value = ''; }} onChangePhotoRow={updatePhotoRow} onDownloadPhotoRows={downloadPhotoRowsAsExcel} onSavePhotoRows={savePhotoRowsToDevice} onClearPhotoRows={clearSavedPhotoRows} photoSaveBusy={photoSaveBusy} photoProgress={photoProgress} masterRecordByBarcode={masterRecordByBarcode} />}
           {(view === 'scanner' || view === 'search') && <MatchSection exactMatch={exactMatch} similarMatches={similarMatches} emptyMessage={searchEmptyMessage} />}
         </div>
         <aside className="space-y-6">
@@ -893,12 +894,14 @@ function ConvertPanel(props: {
   onChoose: () => void;
   onFile: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
   photoInputRef: React.RefObject<HTMLInputElement | null>;
+  photoGalleryInputRef: React.RefObject<HTMLInputElement | null>;
   photoBusy: boolean;
   photoMessage: string | null;
   photoSummary: InventoryPhotoSummary | null;
   photoRows: InventoryPhotoRow[];
   photoWarnings: string[];
   onChoosePhoto: () => void;
+  onChoosePhotoFromLibrary: () => void;
   onPhotoFile: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
   onChangePhotoRow: (index: number, key: 'barcode' | 'name', value: string) => void;
   onDownloadPhotoRows: () => void;
@@ -920,17 +923,22 @@ function ConvertPanel(props: {
     <section className="space-y-6">
       <Panel title="재고현황 표 사진 변환" icon={<DescriptionIcon className="h-5 w-5" />}>
         <input ref={props.photoInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={props.onPhotoFile} />
+        <input ref={props.photoGalleryInputRef} type="file" accept="image/*" className="hidden" onChange={props.onPhotoFile} />
         <div className="flex flex-col gap-4 rounded-[2rem] border border-dashed border-[#9eb3c7] bg-[#f0f4f8] p-6">
           <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
             <div>
               <p className="text-lg font-bold text-[#171c1f]">휴대폰 카메라로 재고현황 표 추출</p>
-              <p className="mt-2 text-sm text-[#5b6670]">사진 업로드 또는 모바일 카메라 촬영 후 상품코드 / 상품명 2열을 추출합니다.</p>
+              <p className="mt-2 text-sm text-[#5b6670]">사진 촬영 또는 앨범의 기존 사진 선택 후 상품코드 / 상품명 2열을 추출합니다.</p>
             </div>
-            <button onClick={props.onChoosePhoto} disabled={props.photoBusy} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white disabled:opacity-60">사진 선택 / 촬영</button>
+            <div className="flex flex-wrap gap-3">
+              <button onClick={props.onChoosePhoto} disabled={props.photoBusy} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white disabled:opacity-60">카메라 촬영</button>
+              <button onClick={props.onChoosePhotoFromLibrary} disabled={props.photoBusy} className="rounded-2xl bg-[#edf4fb] px-5 py-3 font-semibold text-[#002542] disabled:opacity-60">기존 사진 선택</button>
+            </div>
           </div>
           <div className="grid grid-cols-1 gap-3 text-sm text-[#5b6670] md:grid-cols-2">
             <div className="rounded-[1.25rem] bg-white px-4 py-3">문서 영역 자동 보정 후 OCR</div>
-            <div className="rounded-[1.25rem] bg-white px-4 py-3">추출 결과는 셀 단위로 수정 가능</div>
+            <div className="rounded-[1.25rem] bg-white px-4 py-3">촬영 사진과 저장된 사진 모두 선택 가능</div>
+            <div className="rounded-[1.25rem] bg-white px-4 py-3 md:col-span-2">추출 결과는 셀 단위로 수정 가능</div>
           </div>
         </div>
         {props.photoBusy && (
