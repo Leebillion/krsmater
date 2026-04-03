@@ -39,6 +39,25 @@ export type BundleMasterImportResponse = {
   warnings: string[];
 };
 
+export type InventoryPhotoRow = {
+  barcode: string;
+  name: string;
+  rowNumber: number;
+};
+
+export type InventoryPhotoSummary = {
+  fileName: string;
+  importedAt: string;
+  recordCount: number;
+};
+
+export type InventoryPhotoParseResponse = {
+  ok: true;
+  summary: InventoryPhotoSummary;
+  items: InventoryPhotoRow[];
+  warnings: string[];
+};
+
 type ActiveMasterPayload = {
   active: MasterFileSummary | null;
   records: MasterRecord[];
@@ -187,6 +206,23 @@ export async function searchBundleMaster(query: string) {
   }
 
   return (await response.json()) as BundleMasterSearchPayload;
+}
+
+export async function uploadInventoryPhoto(file: File) {
+  const formData = new FormData();
+  formData.append('photoFile', file);
+
+  const response = await fetch('/api/convert/inventory-photo', {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await safeJson(response);
+    throw new Error(error?.error ?? '재고현황 표 사진 변환에 실패했습니다.');
+  }
+
+  return (await response.json()) as InventoryPhotoParseResponse;
 }
 
 async function safeJson(response: Response) {

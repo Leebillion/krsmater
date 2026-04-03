@@ -176,3 +176,16 @@ Before next release:
 - PWA manifest/service worker are now enabled
 - update banner and local draft restore are now enabled
 - real blocking issue for iPhone is still HTTPS/certificate first, scanner fallback second
+
+## Latest Update Note
+- convert tab `변환` has been added and is working locally
+- convert parser now avoids scientific-notation barcode output for numeric Excel cells where possible
+- convert card row labels now count data rows only and exclude the header row
+- real-file validation is still needed for leading-zero preservation and operator expectations
+
+## Latest Update Note 2
+- photo OCR convert flow has been added under the convert tab
+- local verification on the provided sample photo now reaches 14 rows
+- further OCR quality tuning is still needed for occasional product-name noise on difficult rows
+- operator workflow with smartphone barcode scanning and quantity input should be tested end-to-end
+- temp-save restore behavior for OCR rows should be checked on actual mobile devices

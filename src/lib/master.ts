@@ -26,6 +26,7 @@ const BARCODE_BYTES = 13;
 const NAME_BYTES = 30;
 const SHORT_NAME_BYTES = 14;
 const TOTAL_BYTES = BARCODE_BYTES + NAME_BYTES + SHORT_NAME_BYTES;
+const CHOSEONG = ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ'];
 
 export async function parseMasterFile(file: File): Promise<{ records: MasterRecord[]; summary: MasterFileSummary }> {
   const buffer = await file.arrayBuffer();
@@ -83,6 +84,9 @@ export function findBarcodeMatches(records: MasterRecord[], rawInput: string): B
   if (!input || records.length === 0) return [];
 
   const textQuery = normalizeText(input);
+  const textTokens = tokenizeText(input);
+  const chosungQuery = extractChosung(textQuery);
+  const chosungTokens = textTokens.map(extractChosung).filter(Boolean);
   const barcodeCandidates = extractBarcodeCandidates(input);
   const matches: BarcodeMatch[] = [];
 
@@ -91,13 +95,43 @@ export function findBarcodeMatches(records: MasterRecord[], rawInput: string): B
     let bestType: BarcodeMatch['matchType'] = 'barcode-similar';
     let reasons: string[] = [];
 
-    if (
+    const normalizedName = normalizeText(record.name);
+    const normalizedShortName = normalizeText(record.shortName);
+    const nameTokens = tokenizeText(record.name);
+    const shortNameTokens = tokenizeText(record.shortName);
+    const nameChosung = extractChosung(normalizedName);
+    const shortNameChosung = extractChosung(normalizedShortName);
+
+    const exactTextMatch =
       textQuery &&
-      (normalizeText(record.name).includes(textQuery) || normalizeText(record.shortName).includes(textQuery))
-    ) {
+      (normalizedName.includes(textQuery) || normalizedShortName.includes(textQuery));
+
+    const combinedTokenMatch =
+      textTokens.length > 1 &&
+      (matchesAllTokens(textTokens, normalizedName) ||
+        matchesAllTokens(textTokens, normalizedShortName) ||
+        matchesAllTokens(textTokens, nameTokens) ||
+        matchesAllTokens(textTokens, shortNameTokens));
+
+    const chosungMatch =
+      chosungQuery &&
+      (nameChosung.includes(chosungQuery) ||
+        shortNameChosung.includes(chosungQuery) ||
+        matchesAllTokens(chosungTokens, nameChosung) ||
+        matchesAllTokens(chosungTokens, shortNameChosung));
+
+    if (exactTextMatch) {
       bestScore = 0.74;
       bestType = 'text';
       reasons = ['상품명 또는 축약명 일치'];
+    } else if (combinedTokenMatch) {
+      bestScore = 0.7;
+      bestType = 'text';
+      reasons = ['조합 검색 일치'];
+    } else if (chosungMatch) {
+      bestScore = 0.68;
+      bestType = 'text';
+      reasons = ['초성 검색 일치'];
     }
 
     for (const candidate of barcodeCandidates) {
@@ -155,6 +189,37 @@ function normalizeDigits(value: string) {
 
 function normalizeText(value: string) {
   return value.replace(/\s+/g, '').toLowerCase();
+}
+
+function tokenizeText(value: string) {
+  return value
+    .trim()
+    .toLowerCase()
+    .split(/\s+/)
+    .map((token) => normalizeText(token))
+    .filter(Boolean);
+}
+
+function extractChosung(value: string) {
+  let result = '';
+  for (const char of value) {
+    const code = char.charCodeAt(0);
+    if (code >= 0xac00 && code <= 0xd7a3) {
+      const index = Math.floor((code - 0xac00) / 588);
+      result += CHOSEONG[index] ?? char;
+    } else if (CHOSEONG.includes(char)) {
+      result += char;
+    } else if (/[a-z0-9]/.test(char)) {
+      result += char;
+    }
+  }
+  return result;
+}
+
+function matchesAllTokens(tokens: string[], target: string | string[]) {
+  if (tokens.length === 0) return false;
+  const values = Array.isArray(target) ? target : [target];
+  return tokens.every((token) => values.some((value) => value.includes(token)));
 }
 
 function scoreBarcodeCandidate(input: string, target: string) {

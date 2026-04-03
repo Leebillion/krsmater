@@ -66,18 +66,19 @@ export async function parseConversionFile(file: File): Promise<ConvertedBarcodeR
 
   for (let index = 1; index < rows.length; index += 1) {
     const row = rows[index] ?? [];
-    const rowNumber = index + 1;
+    const sourceRowNumber = index + 1;
+    const displayRowNumber = index;
     const barcode = normalizeBarcodeValue(row[codeIndex]);
     const name = normalizeNameValue(row[nameIndex]);
 
     if (!barcode && !name) continue;
 
     if (!barcode || !name) {
-      warnings.push(`${rowNumber}행은 상품코드 또는 상품명이 비어 있어 제외했습니다.`);
+      warnings.push(`${sourceRowNumber}행은 상품코드 또는 상품명이 비어 있어 제외했습니다.`);
       continue;
     }
 
-    items.push({ barcode, name, rowNumber });
+    items.push({ barcode, name, rowNumber: displayRowNumber });
   }
 
   if (!items.length) {

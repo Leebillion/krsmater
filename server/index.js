@@ -1,6 +1,11 @@
 import cors from 'cors';
 import express from 'express';
+import { execFile } from 'child_process';
+import { promises as fs } from 'fs';
 import multer from 'multer';
+import os from 'os';
+import path from 'path';
+import { promisify } from 'util';
 import * as XLSX from 'xlsx';
 import {
   createBundleReport,
@@ -21,6 +26,7 @@ import { findBarcodeMatches, parseMasterBuffer } from './masterParser.js';
 const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 const port = Number(process.env.PORT ?? 3100);
+const execFileAsync = promisify(execFile);
 
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
@@ -205,6 +211,29 @@ app.post('/api/bundles/master/import', upload.single('bundleFile'), async (req, 
   }
 });
 
+app.post('/api/convert/inventory-photo', upload.single('photoFile'), async (req, res, next) => {
+  try {
+    if (!req.file) {
+      res.status(400).json({ error: 'photoFile is required' });
+      return;
+    }
+
+    const result = await runInventoryPhotoOcr(req.file.buffer, req.file.originalname);
+    res.json({
+      ok: true,
+      summary: {
+        fileName: req.file.originalname,
+        importedAt: new Date().toISOString(),
+        recordCount: result.items.length,
+      },
+      items: result.items,
+      warnings: result.warnings,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.get('/api/bundles/master/search', async (req, res, next) => {
   try {
     const query = String(req.query.q ?? '').trim();
@@ -383,4 +412,43 @@ function formatDateForFile() {
   const hour = String(now.getHours()).padStart(2, '0');
   const minute = String(now.getMinutes()).padStart(2, '0');
   return `${year}${month}${day}_${hour}${minute}`;
+}
+
+async function runInventoryPhotoOcr(buffer, originalName) {
+  const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'krs-photo-ocr-'));
+  const inputPath = path.join(tempDir, sanitizeFileName(originalName || 'inventory_photo.jpg'));
+  const scriptPath = path.join(process.cwd(), 'server', 'ocr_inventory_table.py');
+
+  try {
+    await fs.writeFile(inputPath, buffer);
+    const { stdout, stderr } = await execFileAsync('python', [scriptPath, inputPath], {
+      cwd: process.cwd(),
+      maxBuffer: 10 * 1024 * 1024,
+      env: {
+        ...process.env,
+        PYTHONIOENCODING: 'utf-8',
+      },
+    });
+
+    const payload = JSON.parse(stdout || '{}');
+    if (!payload.ok) {
+      throw new Error(payload.error || stderr || 'OCR 처리에 실패했습니다.');
+    }
+
+    return {
+      items: Array.isArray(payload.items) ? payload.items : [],
+      warnings: Array.isArray(payload.warnings) ? payload.warnings : [],
+    };
+  } catch (error) {
+    if (error instanceof SyntaxError) {
+      throw new Error('OCR 응답 해석에 실패했습니다.');
+    }
+    throw error;
+  } finally {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  }
+}
+
+function sanitizeFileName(value) {
+  return String(value ?? 'inventory_photo.jpg').replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
 }

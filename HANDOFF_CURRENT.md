@@ -186,3 +186,26 @@ Quick API checks:
 curl http://localhost:3100/api/health
 curl http://localhost:3100/api/bundles/report
 ```
+
+## Latest Update Note
+- convert tab is now active in the main menu as `변환`
+- accepted input files: `.xlsx`, `.xls`, `.csv`
+- expected input headers: `상품코드`, `상품명`
+- output cards render `바코드`, `상품명`, and a visible barcode preview
+- Excel numeric barcode cells are converted without scientific notation where possible
+- visible row labels in convert cards now exclude the header row
+- if the original Excel file already lost leading `0` because the code column was saved as numeric, recovery is not possible in-app
+- recommended operator rule: keep the `상품코드` column as text format when leading `0` matters
+
+## Latest Update Note 2
+- search tab now supports Korean initial-consonant search and combined token search
+- supported examples include `ㅅㅋ ㄸㄱ` and `새콤 딸기`
+- convert tab now includes `재고현황 표 사진 변환`
+- photo OCR flow supports mobile camera upload, document correction, Korean OCR, editable result rows, and xlsx export
+- sample inventory photo extraction improved from 12 rows to 14 rows in local verification
+- each OCR row now shows `상품코드`, `마스터 일치 여부`, `상품명`, `생성 바코드`
+- OCR result rows can be temporarily saved per device in IndexedDB and restored on the next visit
+- additional photo captures append below existing OCR rows instead of replacing them
+- OCR result actions now include total count, temporary save, delete, and excel download
+- barcode preview is intended for follow-up smartphone scanning and quantity entry workflow
+- server-side OCR currently uses Python + OpenCV + pytesseract with local `server/tessdata`

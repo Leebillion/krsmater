@@ -1,4 +1,5 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
+import * as XLSX from 'xlsx';
 import { BarcodePreview } from './components/BarcodePreview';
 import { BundleIcon, CheckCircleIcon, DescriptionIcon, HistoryIcon, InfoIcon, InventoryIcon, ScannerIcon, SearchIcon, UploadIcon } from './components/Icons';
 import {
@@ -9,16 +10,27 @@ import {
   fetchServerMaster,
   listBundleReports,
   searchBundleMaster,
+  uploadInventoryPhoto,
   updateBundleReport,
   type BundleMasterRecord,
   type BundleMasterSummary,
   type BundleReportInput,
   type BundleReportRow,
+  type InventoryPhotoRow,
+  type InventoryPhotoSummary,
   uploadBundleMaster,
   uploadMasterToServer,
 } from './lib/api';
 import { parseConversionFile, type ConvertedBarcodeItem, type ConvertedBarcodeSummary } from './lib/converter';
-import { clearPersistedState, loadPersistedState, savePersistedState, type PersistedHistoryItem } from './lib/persistence';
+import {
+  clearPersistedPhotoOcrState,
+  clearPersistedState,
+  loadPersistedPhotoOcrState,
+  loadPersistedState,
+  savePersistedPhotoOcrState,
+  savePersistedState,
+  type PersistedHistoryItem,
+} from './lib/persistence';
 import { type BarcodeMatch, type MasterFileSummary, type MasterRecord, findBarcodeMatches, formatSimilarity, parseMasterFile } from './lib/master';
 
 type ViewMode = 'scanner' | 'search' | 'bundle' | 'import' | 'convert';
@@ -117,6 +129,12 @@ export default function KrsMasterApp() {
   const [convertMessage, setConvertMessage] = useState<string | null>('엑셀 또는 CSV 파일을 올리면 바코드 리스트로 변환합니다.');
   const [convertWarnings, setConvertWarnings] = useState<string[]>([]);
   const [convertQuery, setConvertQuery] = useState('');
+  const [photoSummary, setPhotoSummary] = useState<InventoryPhotoSummary | null>(null);
+  const [photoRows, setPhotoRows] = useState<InventoryPhotoRow[]>([]);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [photoMessage, setPhotoMessage] = useState<string | null>('재고현황 표 사진을 올리면 상품코드와 상품명을 추출합니다.');
+  const [photoWarnings, setPhotoWarnings] = useState<string[]>([]);
+  const [photoSaveBusy, setPhotoSaveBusy] = useState(false);
   const [bundleReportRows, setBundleReportRows] = useState<BundleReportRow[]>([]);
   const [bundleReportRowsBusy, setBundleReportRowsBusy] = useState(false);
   const [bundleReportRowsMessage, setBundleReportRowsMessage] = useState<string | null>(null);
@@ -126,6 +144,7 @@ export default function KrsMasterApp() {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const bundleMasterInputRef = useRef<HTMLInputElement | null>(null);
   const convertInputRef = useRef<HTMLInputElement | null>(null);
+  const photoInputRef = useRef<HTMLInputElement | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const rafRef = useRef<number | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -141,6 +160,13 @@ export default function KrsMasterApp() {
     if (!keyword) return convertedItems;
     return convertedItems.filter((item) => item.barcode.toLowerCase().includes(keyword) || item.name.toLowerCase().includes(keyword));
   }, [convertQuery, convertedItems]);
+  const masterRecordByBarcode = useMemo(() => {
+    const map = new Map<string, MasterRecord>();
+    for (const record of records) {
+      map.set(record.barcode, record);
+    }
+    return map;
+  }, [records]);
   const searchValidation = getSearchValidation(query);
   const searchEmptyMessage = view === 'scanner'
     ? '스캔 또는 직접 입력 결과를 기준으로 후보를 보여드립니다.'
@@ -282,8 +308,26 @@ export default function KrsMasterApp() {
         if (!cancelled) setBundleMasterMessage('번들 마스터 상태를 불러오지 못했습니다.');
       }
     };
+    const loadPhotoOcr = async () => {
+      try {
+        const persisted = await loadPersistedPhotoOcrState();
+        if (!cancelled && persisted) {
+          setPhotoSummary(persisted.summary);
+          setPhotoRows(persisted.rows);
+          setPhotoWarnings(persisted.warnings);
+          if (persisted.rows.length) {
+            setPhotoMessage(`임시 저장된 사진 OCR 결과 ${persisted.rows.length.toLocaleString()}건을 복원했습니다.`);
+          }
+        }
+      } catch {
+        if (!cancelled) {
+          setPhotoMessage('사진 OCR 임시 저장 복원에 실패했습니다.');
+        }
+      }
+    };
     void load();
     void loadBundle();
+    void loadPhotoOcr();
     return () => {
       cancelled = true;
     };
@@ -562,6 +606,92 @@ export default function KrsMasterApp() {
     }
   };
 
+  const convertInventoryPhoto = async (file: File) => {
+    try {
+      setPhotoBusy(true);
+      setPhotoMessage(null);
+      const result = await uploadInventoryPhoto(file);
+      setPhotoRows((prev) => mergePhotoRows(prev, result.items));
+      setPhotoSummary((prev) => ({
+        fileName: prev ? `${prev.fileName}, ${result.summary.fileName}` : result.summary.fileName,
+        importedAt: result.summary.importedAt,
+        recordCount: (prev?.recordCount ?? 0) + result.items.length,
+      }));
+      setPhotoWarnings((prev) => [...prev, ...result.warnings]);
+      setPhotoMessage(
+        `${result.items.length.toLocaleString()}건을 추가 추출했습니다. 표에서 바로 수정한 뒤 임시 저장 또는 엑셀 다운로드할 수 있습니다.`,
+      );
+      setView('convert');
+    } catch (error) {
+      setPhotoMessage(error instanceof Error ? error.message : '재고현황 표 사진 변환에 실패했습니다.');
+    } finally {
+      setPhotoBusy(false);
+    }
+  };
+
+  const updatePhotoRow = (index: number, key: 'barcode' | 'name', value: string) => {
+    setPhotoRows((prev) => prev.map((row, rowIndex) => {
+      if (rowIndex !== index) return row;
+      return {
+        ...row,
+        [key]: key === 'barcode' ? value.replace(/\D/g, '') : value,
+      };
+    }));
+  };
+
+  const downloadPhotoRowsAsExcel = () => {
+    if (photoRows.length === 0) {
+      setPhotoMessage('다운로드할 추출 결과가 없습니다.');
+      return;
+    }
+
+    const workbook = XLSX.utils.book_new();
+    const rows = photoRows.map((row) => ({
+      상품코드: row.barcode,
+      상품명: row.name,
+    }));
+    const worksheet = XLSX.utils.json_to_sheet(rows);
+    XLSX.utils.book_append_sheet(workbook, worksheet, '재고현황변환');
+    const fileName = `inventory_photo_${formatNowForFile()}.xlsx`;
+    const arrayBuffer = XLSX.write(workbook, { type: 'array', bookType: 'xlsx' });
+    downloadBlob(
+      new Blob([arrayBuffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }),
+      fileName,
+    );
+  };
+
+  const savePhotoRowsToDevice = async () => {
+    try {
+      setPhotoSaveBusy(true);
+      await savePersistedPhotoOcrState({
+        summary: photoSummary,
+        rows: photoRows,
+        warnings: photoWarnings,
+        savedAt: new Date().toISOString(),
+      });
+      setPhotoMessage(`사진 OCR 결과 ${photoRows.length.toLocaleString()}건을 이 기기에 임시 저장했습니다.`);
+    } catch {
+      setPhotoMessage('사진 OCR 결과 임시 저장에 실패했습니다.');
+    } finally {
+      setPhotoSaveBusy(false);
+    }
+  };
+
+  const clearSavedPhotoRows = async () => {
+    try {
+      setPhotoSaveBusy(true);
+      await clearPersistedPhotoOcrState();
+      setPhotoSummary(null);
+      setPhotoRows([]);
+      setPhotoWarnings([]);
+      setPhotoMessage('사진 OCR 임시 저장 데이터를 삭제했습니다.');
+    } catch {
+      setPhotoMessage('사진 OCR 임시 저장 데이터 삭제에 실패했습니다.');
+    } finally {
+      setPhotoSaveBusy(false);
+    }
+  };
+
   const startEditBundleReport = (row: BundleReportRow) => {
     setEditingReportId(row.id);
     setEditingReportForm({
@@ -656,7 +786,7 @@ export default function KrsMasterApp() {
           {view === 'search' && <SearchPanel query={query} setQuery={setQuery} onSearch={runSearch} onClear={() => { setQuery(''); setSubmittedQuery(''); }} validationMessage={searchValidation.message} searchEnabled={searchValidation.canSearch} />}
           {view === 'import' && <ImportPanel inputRef={inputRef} uploading={uploading} uploadMessage={uploadMessage} onChoose={() => inputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await saveMasterFile(file); event.target.value = ''; }} />}
           {view === 'bundle' && <BundlePanel bundleTab={bundleTab} setBundleTab={setBundleTab} onOpenReportStatus={() => void openBundleReportStatus()} bundleForm={bundleForm} setBundleForm={setBundleForm} bundleReportBusy={bundleReportBusy} bundleReportMessage={bundleReportMessage} onSave={saveBundleReport} onDownload={downloadBundleDb} bundleReportRows={bundleReportRows} bundleReportRowsBusy={bundleReportRowsBusy} bundleReportRowsMessage={bundleReportRowsMessage} editingReportId={editingReportId} editingReportForm={editingReportForm} setEditingReportForm={setEditingReportForm} onRefreshReportRows={() => void loadBundleReportRows()} onStartEdit={startEditBundleReport} onCancelEdit={cancelEditBundleReport} onSaveEdit={() => void saveEditedBundleReport()} onDelete={(id) => void removeBundleReport(id)} bundleMasterInputRef={bundleMasterInputRef} bundleMasterBusy={bundleMasterBusy} bundleMasterMessage={bundleMasterMessage} bundleMasterSummary={bundleMasterSummary} onPickBundleMaster={() => bundleMasterInputRef.current?.click()} onBundleMasterFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await uploadBundleMasterFile(file); event.target.value = ''; }} bundleLookupQuery={bundleLookupQuery} setBundleLookupQuery={setBundleLookupQuery} bundleLookupItems={bundleLookupItems} bundleLookupBusy={bundleLookupBusy} bundleLookupMessage={bundleLookupMessage} onLookup={() => void loadBundleLookup(bundleLookupQuery)} />}
-          {view === 'convert' && <ConvertPanel inputRef={convertInputRef} busy={convertBusy} message={convertMessage} summary={convertSummary} items={filteredConvertedItems} totalItems={convertedItems.length} warnings={convertWarnings} query={convertQuery} setQuery={setConvertQuery} onChoose={() => convertInputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertFileToBarcodeList(file); event.target.value = ''; }} />}
+          {view === 'convert' && <ConvertPanel inputRef={convertInputRef} busy={convertBusy} message={convertMessage} summary={convertSummary} items={filteredConvertedItems} totalItems={convertedItems.length} warnings={convertWarnings} query={convertQuery} setQuery={setConvertQuery} onChoose={() => convertInputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertFileToBarcodeList(file); event.target.value = ''; }} photoInputRef={photoInputRef} photoBusy={photoBusy} photoMessage={photoMessage} photoSummary={photoSummary} photoRows={photoRows} photoWarnings={photoWarnings} onChoosePhoto={() => photoInputRef.current?.click()} onPhotoFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertInventoryPhoto(file); event.target.value = ''; }} onChangePhotoRow={updatePhotoRow} onDownloadPhotoRows={downloadPhotoRowsAsExcel} onSavePhotoRows={savePhotoRowsToDevice} onClearPhotoRows={clearSavedPhotoRows} photoSaveBusy={photoSaveBusy} masterRecordByBarcode={masterRecordByBarcode} />}
           {(view === 'scanner' || view === 'search') && <MatchSection exactMatch={exactMatch} similarMatches={similarMatches} emptyMessage={searchEmptyMessage} />}
         </div>
         <aside className="space-y-6">
@@ -738,9 +868,74 @@ function ConvertPanel(props: {
   setQuery: React.Dispatch<React.SetStateAction<string>>;
   onChoose: () => void;
   onFile: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
+  photoInputRef: React.RefObject<HTMLInputElement | null>;
+  photoBusy: boolean;
+  photoMessage: string | null;
+  photoSummary: InventoryPhotoSummary | null;
+  photoRows: InventoryPhotoRow[];
+  photoWarnings: string[];
+  onChoosePhoto: () => void;
+  onPhotoFile: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
+  onChangePhotoRow: (index: number, key: 'barcode' | 'name', value: string) => void;
+  onDownloadPhotoRows: () => void;
+  onSavePhotoRows: () => void;
+  onClearPhotoRows: () => void;
+  photoSaveBusy: boolean;
+  masterRecordByBarcode: Map<string, MasterRecord>;
 }) {
   return (
     <section className="space-y-6">
+      <Panel title="재고현황 표 사진 변환" icon={<DescriptionIcon className="h-5 w-5" />}>
+        <input ref={props.photoInputRef} type="file" accept="image/*" capture="environment" className="hidden" onChange={props.onPhotoFile} />
+        <div className="flex flex-col gap-4 rounded-[2rem] border border-dashed border-[#9eb3c7] bg-[#f0f4f8] p-6">
+          <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
+            <div>
+              <p className="text-lg font-bold text-[#171c1f]">휴대폰 카메라로 재고현황 표 추출</p>
+              <p className="mt-2 text-sm text-[#5b6670]">사진 업로드 또는 모바일 카메라 촬영 후 상품코드 / 상품명 2열을 추출합니다.</p>
+            </div>
+            <button onClick={props.onChoosePhoto} disabled={props.photoBusy} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white disabled:opacity-60">사진 선택 / 촬영</button>
+          </div>
+          <div className="grid grid-cols-1 gap-3 text-sm text-[#5b6670] md:grid-cols-2">
+            <div className="rounded-[1.25rem] bg-white px-4 py-3">문서 영역 자동 보정 후 OCR</div>
+            <div className="rounded-[1.25rem] bg-white px-4 py-3">추출 결과는 셀 단위로 수정 가능</div>
+          </div>
+        </div>
+        {props.photoMessage && <div className="mt-4 rounded-[1.5rem] border border-[#dce6f0] bg-[#f8fbfd] p-4 text-sm text-[#5b6670]">{props.photoBusy ? '사진을 분석 중...' : props.photoMessage}</div>}
+        {props.photoSummary && <div className="mt-4 rounded-[1.5rem] bg-[#edf4fb] p-4 text-sm text-[#002542]">{props.photoSummary.fileName} / {props.photoSummary.recordCount.toLocaleString()}건 / {formatDate(props.photoSummary.importedAt)}</div>}
+      </Panel>
+
+      <section className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+        <Panel title="사진 OCR 추출 결과" icon={<CheckCircleIcon className="h-5 w-5" />}>
+          <div className="flex flex-wrap gap-3">
+            <div className="rounded-2xl bg-[#edf4fb] px-4 py-3 text-sm font-semibold text-[#002542]">총 {props.photoRows.length.toLocaleString()}건</div>
+            <button onClick={props.onSavePhotoRows} disabled={props.photoSaveBusy || props.photoRows.length === 0} className="rounded-2xl bg-[#174f83] px-5 py-3 font-semibold text-white disabled:opacity-60">임시 저장</button>
+            <button onClick={props.onClearPhotoRows} disabled={props.photoSaveBusy || props.photoRows.length === 0} className="rounded-2xl bg-[#ffe7e5] px-5 py-3 font-semibold text-[#93000a] disabled:opacity-60">삭제</button>
+            <button onClick={props.onDownloadPhotoRows} disabled={props.photoRows.length === 0} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white disabled:opacity-60">엑셀 다운로드</button>
+          </div>
+          <div className="mt-6 space-y-4">
+            {props.photoRows.length === 0 && !props.photoBusy && <div className="rounded-[1.5rem] border border-[#dce6f0] bg-[#f8fbfd] p-5 text-sm text-[#5b6670]">아직 추출된 표가 없습니다.</div>}
+            {props.photoRows.map((row, index) => (
+              <div key={`photo-row-${row.rowNumber}-${index}`}>
+                <PhotoOcrCard
+                  row={row}
+                  masterName={props.masterRecordByBarcode.get(row.barcode)?.name ?? null}
+                  onChangeBarcode={(value) => props.onChangePhotoRow(index, 'barcode', value)}
+                  onChangeName={(value) => props.onChangePhotoRow(index, 'name', value)}
+                />
+              </div>
+            ))}
+          </div>
+        </Panel>
+
+        <Panel title="사진 변환 기준" icon={<InfoIcon className="h-5 w-5" />}>
+          <MetricRow label="입력 방식" value="이미지 업로드 / 모바일 촬영" />
+          <MetricRow label="OCR 언어" value="한국어 + 영문" />
+          <MetricRow label="추출 열" value="상품코드 / 상품명" />
+          <MetricRow label="다운로드" value="날짜 기반 xlsx" />
+          {props.photoWarnings.length > 0 && <p className="mt-4 whitespace-pre-line text-sm text-[#8a5100]">{props.photoWarnings.slice(0, 10).join('\n')}{props.photoWarnings.length > 10 ? `\n외 ${props.photoWarnings.length - 10}건` : ''}</p>}
+        </Panel>
+      </section>
+
       <Panel title="바코드 변환" icon={<DescriptionIcon className="h-5 w-5" />}>
         <input ref={props.inputRef} type="file" accept=".xlsx,.xls,.csv,text/csv,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" onChange={props.onFile} />
         <div className="flex flex-col gap-4 rounded-[2rem] border border-dashed border-[#9eb3c7] bg-[#f0f4f8] p-6 md:flex-row md:items-center md:justify-between">
@@ -956,6 +1151,38 @@ function BundleCard({ item }: { item: BundleMasterRecord }) {
 
 function ConvertedBarcodeCard({ item }: { item: ConvertedBarcodeItem }) {
   return <div className="rounded-[1.5rem] border border-[#dce6f0] bg-[#f8fbfd] p-5"><div className="flex flex-wrap items-start justify-between gap-3"><div><p className="font-mono text-lg font-bold text-[#002542]">{item.barcode}</p><p className="mt-2 text-lg font-bold text-[#171c1f]">{item.name}</p></div><span className="rounded-full bg-[#edf4fb] px-3 py-1 text-xs font-bold text-[#002542]">{item.rowNumber}행</span></div><div className="mt-4"><BarcodePreview value={item.barcode} /></div></div>;
+}
+
+function PhotoOcrCard(props: {
+  row: InventoryPhotoRow;
+  masterName: string | null;
+  onChangeBarcode: (value: string) => void;
+  onChangeName: (value: string) => void;
+}) {
+  return (
+    <div className="rounded-[1.5rem] border border-[#dce6f0] bg-white p-5">
+      <div className="flex items-center justify-between gap-3">
+        <p className="text-sm font-semibold text-[#5b6670]">{props.row.rowNumber}행</p>
+        <span className={`rounded-full px-3 py-1 text-xs font-bold ${props.masterName ? 'bg-[#dff3e3] text-[#005c29]' : 'bg-[#ffe7e5] text-[#93000a]'}`}>{props.masterName ? '마스터 일치' : '마스터 불일치'}</span>
+      </div>
+      <div className="mt-4">
+        <BundleField label="상품코드">
+          <input value={props.row.barcode} onChange={(event) => props.onChangeBarcode(event.target.value.replace(/\D/g, ''))} inputMode="numeric" className="w-full rounded-xl border border-[#d6e0ea] bg-white px-3 py-2 font-mono outline-none" />
+        </BundleField>
+      </div>
+      <div className="mt-4">
+        <BundleField label="상품명">
+          <input value={props.row.name} onChange={(event) => props.onChangeName(event.target.value)} className="w-full rounded-xl border border-[#d6e0ea] bg-white px-3 py-2 outline-none" />
+        </BundleField>
+      </div>
+      <div className="mt-4">
+        <BundleField label="생성 바코드">
+          <BarcodePreview value={props.row.barcode} />
+        </BundleField>
+      </div>
+      {props.masterName && <p className="mt-3 text-sm text-[#005c29]">마스터 상품명: {props.masterName}</p>}
+    </div>
+  );
 }
 
 function BundleReportStatusCard(props: {
@@ -1177,9 +1404,17 @@ function getSearchValidation(value: string) {
       : { canSearch: false, message: '숫자 검색은 최소 4자리부터 가능합니다.' };
   }
 
-  return new TextEncoder().encode(trimmed).length >= 6
+  const compact = trimmed.replace(/\s+/g, '');
+  const isChosungOnly = /^[ㄱ-ㅎ]+$/.test(compact);
+  if (isChosungOnly) {
+    return compact.length >= 2
+      ? { canSearch: true, message: null }
+      : { canSearch: false, message: '초성 검색은 최소 2자부터 가능합니다.' };
+  }
+
+  return new TextEncoder().encode(compact).length >= 2
     ? { canSearch: true, message: null }
-    : { canSearch: false, message: '한글 또는 영문 검색은 최소 6byte부터 가능합니다.' };
+    : { canSearch: false, message: '한글 또는 영문 검색은 최소 2byte부터 가능합니다.' };
 }
 
 function downloadBlob(blob: Blob, fileName: string) {
@@ -1205,6 +1440,17 @@ function formatNowForFile() {
 function createHistoryId() {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') return crypto.randomUUID();
   return `hist_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function mergePhotoRows(previous: InventoryPhotoRow[], incoming: InventoryPhotoRow[]) {
+  const merged = [...previous.map((row) => ({ ...row }))];
+  for (const item of incoming) {
+    merged.push({
+      ...item,
+      rowNumber: merged.length + 1,
+    });
+  }
+  return merged;
 }
 
 
