@@ -135,6 +135,7 @@ export default function KrsMasterApp() {
   const [photoMessage, setPhotoMessage] = useState<string | null>('재고현황 표 사진을 올리면 상품코드와 상품명을 추출합니다.');
   const [photoWarnings, setPhotoWarnings] = useState<string[]>([]);
   const [photoSaveBusy, setPhotoSaveBusy] = useState(false);
+  const [photoProgress, setPhotoProgress] = useState(0);
   const [bundleReportRows, setBundleReportRows] = useState<BundleReportRow[]>([]);
   const [bundleReportRowsBusy, setBundleReportRowsBusy] = useState(false);
   const [bundleReportRowsMessage, setBundleReportRowsMessage] = useState<string | null>(null);
@@ -245,6 +246,26 @@ export default function KrsMasterApp() {
       // Ignore draft persistence failures.
     }
   }, [view, bundleTab, query, submittedQuery, scanInput, bundleLookupQuery, convertQuery, bundleForm, editingReportId, editingReportForm]);
+
+  useEffect(() => {
+    if (!photoBusy) {
+      setPhotoProgress((prev) => (prev >= 100 ? 100 : 0));
+      return;
+    }
+
+    setPhotoProgress((prev) => (prev > 0 ? prev : 8));
+    const timer = window.setInterval(() => {
+      setPhotoProgress((prev) => {
+        if (prev >= 92) return prev;
+        if (prev < 28) return prev + 8;
+        if (prev < 58) return prev + 6;
+        if (prev < 78) return prev + 4;
+        return prev + 2;
+      });
+    }, 450);
+
+    return () => window.clearInterval(timer);
+  }, [photoBusy]);
 
   useEffect(() => {
     const handleUpdateReady = () => setUpdateBanner('updateReady');
@@ -609,6 +630,7 @@ export default function KrsMasterApp() {
   const convertInventoryPhoto = async (file: File) => {
     try {
       setPhotoBusy(true);
+      setPhotoProgress(8);
       setPhotoMessage(null);
       const result = await uploadInventoryPhoto(file);
       setPhotoRows((prev) => mergePhotoRows(prev, result.items));
@@ -621,8 +643,10 @@ export default function KrsMasterApp() {
       setPhotoMessage(
         `${result.items.length.toLocaleString()}건을 추가 추출했습니다. 표에서 바로 수정한 뒤 임시 저장 또는 엑셀 다운로드할 수 있습니다.`,
       );
+      setPhotoProgress(100);
       setView('convert');
     } catch (error) {
+      setPhotoProgress(0);
       setPhotoMessage(error instanceof Error ? error.message : '재고현황 표 사진 변환에 실패했습니다.');
     } finally {
       setPhotoBusy(false);
@@ -786,7 +810,7 @@ export default function KrsMasterApp() {
           {view === 'search' && <SearchPanel query={query} setQuery={setQuery} onSearch={runSearch} onClear={() => { setQuery(''); setSubmittedQuery(''); }} validationMessage={searchValidation.message} searchEnabled={searchValidation.canSearch} />}
           {view === 'import' && <ImportPanel inputRef={inputRef} uploading={uploading} uploadMessage={uploadMessage} onChoose={() => inputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await saveMasterFile(file); event.target.value = ''; }} />}
           {view === 'bundle' && <BundlePanel bundleTab={bundleTab} setBundleTab={setBundleTab} onOpenReportStatus={() => void openBundleReportStatus()} bundleForm={bundleForm} setBundleForm={setBundleForm} bundleReportBusy={bundleReportBusy} bundleReportMessage={bundleReportMessage} onSave={saveBundleReport} onDownload={downloadBundleDb} bundleReportRows={bundleReportRows} bundleReportRowsBusy={bundleReportRowsBusy} bundleReportRowsMessage={bundleReportRowsMessage} editingReportId={editingReportId} editingReportForm={editingReportForm} setEditingReportForm={setEditingReportForm} onRefreshReportRows={() => void loadBundleReportRows()} onStartEdit={startEditBundleReport} onCancelEdit={cancelEditBundleReport} onSaveEdit={() => void saveEditedBundleReport()} onDelete={(id) => void removeBundleReport(id)} bundleMasterInputRef={bundleMasterInputRef} bundleMasterBusy={bundleMasterBusy} bundleMasterMessage={bundleMasterMessage} bundleMasterSummary={bundleMasterSummary} onPickBundleMaster={() => bundleMasterInputRef.current?.click()} onBundleMasterFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await uploadBundleMasterFile(file); event.target.value = ''; }} bundleLookupQuery={bundleLookupQuery} setBundleLookupQuery={setBundleLookupQuery} bundleLookupItems={bundleLookupItems} bundleLookupBusy={bundleLookupBusy} bundleLookupMessage={bundleLookupMessage} onLookup={() => void loadBundleLookup(bundleLookupQuery)} />}
-          {view === 'convert' && <ConvertPanel inputRef={convertInputRef} busy={convertBusy} message={convertMessage} summary={convertSummary} items={filteredConvertedItems} totalItems={convertedItems.length} warnings={convertWarnings} query={convertQuery} setQuery={setConvertQuery} onChoose={() => convertInputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertFileToBarcodeList(file); event.target.value = ''; }} photoInputRef={photoInputRef} photoBusy={photoBusy} photoMessage={photoMessage} photoSummary={photoSummary} photoRows={photoRows} photoWarnings={photoWarnings} onChoosePhoto={() => photoInputRef.current?.click()} onPhotoFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertInventoryPhoto(file); event.target.value = ''; }} onChangePhotoRow={updatePhotoRow} onDownloadPhotoRows={downloadPhotoRowsAsExcel} onSavePhotoRows={savePhotoRowsToDevice} onClearPhotoRows={clearSavedPhotoRows} photoSaveBusy={photoSaveBusy} masterRecordByBarcode={masterRecordByBarcode} />}
+          {view === 'convert' && <ConvertPanel inputRef={convertInputRef} busy={convertBusy} message={convertMessage} summary={convertSummary} items={filteredConvertedItems} totalItems={convertedItems.length} warnings={convertWarnings} query={convertQuery} setQuery={setConvertQuery} onChoose={() => convertInputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertFileToBarcodeList(file); event.target.value = ''; }} photoInputRef={photoInputRef} photoBusy={photoBusy} photoMessage={photoMessage} photoSummary={photoSummary} photoRows={photoRows} photoWarnings={photoWarnings} onChoosePhoto={() => photoInputRef.current?.click()} onPhotoFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertInventoryPhoto(file); event.target.value = ''; }} onChangePhotoRow={updatePhotoRow} onDownloadPhotoRows={downloadPhotoRowsAsExcel} onSavePhotoRows={savePhotoRowsToDevice} onClearPhotoRows={clearSavedPhotoRows} photoSaveBusy={photoSaveBusy} photoProgress={photoProgress} masterRecordByBarcode={masterRecordByBarcode} />}
           {(view === 'scanner' || view === 'search') && <MatchSection exactMatch={exactMatch} similarMatches={similarMatches} emptyMessage={searchEmptyMessage} />}
         </div>
         <aside className="space-y-6">
@@ -881,8 +905,17 @@ function ConvertPanel(props: {
   onSavePhotoRows: () => void;
   onClearPhotoRows: () => void;
   photoSaveBusy: boolean;
+  photoProgress: number;
   masterRecordByBarcode: Map<string, MasterRecord>;
 }) {
+  const photoProgressLabel = props.photoProgress < 25
+    ? '이미지 업로드 중'
+    : props.photoProgress < 55
+      ? '문서 영역 보정 중'
+      : props.photoProgress < 85
+        ? 'OCR 분석 중'
+        : '결과 정리 중';
+
   return (
     <section className="space-y-6">
       <Panel title="재고현황 표 사진 변환" icon={<DescriptionIcon className="h-5 w-5" />}>
@@ -900,7 +933,18 @@ function ConvertPanel(props: {
             <div className="rounded-[1.25rem] bg-white px-4 py-3">추출 결과는 셀 단위로 수정 가능</div>
           </div>
         </div>
-        {props.photoMessage && <div className="mt-4 rounded-[1.5rem] border border-[#dce6f0] bg-[#f8fbfd] p-4 text-sm text-[#5b6670]">{props.photoBusy ? '사진을 분석 중...' : props.photoMessage}</div>}
+        {props.photoBusy && (
+          <div className="mt-4 rounded-[1.5rem] border border-[#dce6f0] bg-[#f8fbfd] p-4">
+            <div className="mb-2 flex items-center justify-between gap-3 text-sm">
+              <span className="font-semibold text-[#002542]">{photoProgressLabel}</span>
+              <span className="text-[#5b6670]">{Math.min(props.photoProgress, 99)}%</span>
+            </div>
+            <div className="h-3 overflow-hidden rounded-full bg-[#dce6f0]">
+              <div className="h-full rounded-full bg-[#174f83] transition-[width] duration-300" style={{ width: `${Math.min(props.photoProgress, 99)}%` }} />
+            </div>
+          </div>
+        )}
+        {props.photoMessage && !props.photoBusy && <div className="mt-4 rounded-[1.5rem] border border-[#dce6f0] bg-[#f8fbfd] p-4 text-sm text-[#5b6670]">{props.photoMessage}</div>}
         {props.photoSummary && <div className="mt-4 rounded-[1.5rem] bg-[#edf4fb] p-4 text-sm text-[#002542]">{props.photoSummary.fileName} / {props.photoSummary.recordCount.toLocaleString()}건 / {formatDate(props.photoSummary.importedAt)}</div>}
       </Panel>
 
