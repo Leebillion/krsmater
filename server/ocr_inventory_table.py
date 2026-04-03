@@ -46,26 +46,30 @@ class Token:
 
 
 def main() -> int:
-    if len(sys.argv) < 2:
-        print(json.dumps({"error": "image path is required"}, ensure_ascii=False))
+    try:
+        if len(sys.argv) < 2:
+            print(json.dumps({"error": "image path is required"}, ensure_ascii=False))
+            return 1
+
+        image_path = Path(sys.argv[1])
+        if not image_path.exists():
+            print(json.dumps({"error": "image file not found"}, ensure_ascii=False))
+            return 1
+
+        configure_tesseract()
+
+        images = load_images(image_path)
+        if not images:
+            print(json.dumps({"error": "image decode failed"}, ensure_ascii=False))
+            return 1
+
+        rows, warnings = run_ocr_for_images(images)
+
+        print(json.dumps({"ok": True, "items": rows, "warnings": warnings}, ensure_ascii=False))
+        return 0
+    except Exception as error:
+        print(json.dumps({"error": format_runtime_error(error)}, ensure_ascii=False))
         return 1
-
-    image_path = Path(sys.argv[1])
-    if not image_path.exists():
-        print(json.dumps({"error": "image file not found"}, ensure_ascii=False))
-        return 1
-
-    configure_tesseract()
-
-    images = load_images(image_path)
-    if not images:
-        print(json.dumps({"error": "image decode failed"}, ensure_ascii=False))
-        return 1
-
-    rows, warnings = run_ocr_for_images(images)
-
-    print(json.dumps({"ok": True, "items": rows, "warnings": warnings}, ensure_ascii=False))
-    return 0
 
 
 def configure_tesseract() -> None:
@@ -77,6 +81,14 @@ def configure_tesseract() -> None:
     tessdata_dir = Path(__file__).with_name("tessdata")
     if tessdata_dir.exists():
         os.environ["TESSDATA_PREFIX"] = str(tessdata_dir)
+
+    try:
+        pytesseract.get_tesseract_version()
+    except Exception as error:
+        raise RuntimeError(
+            "Tesseract OCR is not available. Install Tesseract and the Korean/English language data, "
+            "or set TESSERACT_CMD to the tesseract executable path."
+        ) from error
 
 
 def load_images(image_path: Path) -> list[np.ndarray]:
@@ -110,7 +122,12 @@ def load_single_image(image_path: Path) -> np.ndarray | None:
 
 
 def load_pdf_pages(pdf_path: Path) -> list[np.ndarray]:
-    document = pdfium.PdfDocument(str(pdf_path))
+    try:
+        document = pdfium.PdfDocument(str(pdf_path))
+    except Exception as error:
+        raise RuntimeError(
+            "PDF rendering failed. Check that pypdfium2 is installed correctly and the uploaded PDF is readable."
+        ) from error
     images: list[np.ndarray] = []
 
     try:
@@ -546,6 +563,13 @@ def reindex_rows(rows: list[dict]) -> list[dict]:
 
 def dedupe_warnings(warnings: list[str]) -> list[str]:
     return list(dict.fromkeys(warnings))
+
+
+def format_runtime_error(error: Exception) -> str:
+    message = str(error).strip()
+    if not message:
+        message = error.__class__.__name__
+    return message
 
 
 if __name__ == "__main__":

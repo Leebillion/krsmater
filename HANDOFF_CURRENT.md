@@ -224,3 +224,8 @@ curl http://localhost:3100/api/bundles/report
 - photo OCR upload now accepts scanned PDF files in addition to images and mobile camera captures
 - PDF pages are rendered server-side and passed through the same OCR extraction flow as images
 - root `requirements.txt` now includes both `pillow-heif` and `pypdfium2` for HEIC and PDF support
+## Latest Update Note 5
+- local verification on `2026-04-03` confirmed `POST /api/convert/inventory-photo` still succeeds with `data/sample_inventory_photo.jpg` and returns `14` rows
+- direct Python execution also confirmed the OCR worker can open PDF input locally, so the current all-stop risk is more likely runtime/dependency failure than OCR logic regression
+- server OCR error handling was tightened so Python/Tesseract/PDF runtime failures now return clearer JSON error messages instead of opaque parse failures
+- root `.env.example` was replaced with OCR runtime variables: `PORT`, `PYTHON_EXECUTABLE`, `TESSERACT_CMD`

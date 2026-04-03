@@ -437,9 +437,9 @@ async function runInventoryPhotoOcr(buffer, originalName) {
       },
     });
 
-    const payload = JSON.parse(stdout || '{}');
+    const payload = parsePythonJsonOutput(stdout);
     if (!payload.ok) {
-      throw new Error(payload.error || stderr || 'OCR 처리에 실패했습니다.');
+      throw new Error(payload.error || String(stderr || '').trim() || 'OCR 처리에 실패했습니다.');
     }
 
     return {
@@ -448,7 +448,13 @@ async function runInventoryPhotoOcr(buffer, originalName) {
     };
   } catch (error) {
     if (error instanceof SyntaxError) {
-      throw new Error('OCR 응답 해석에 실패했습니다.');
+      throw new Error('OCR 작업기 응답을 해석하지 못했습니다. Python/Tesseract 설정을 확인해 주세요.');
+    }
+    if (error && typeof error === 'object' && 'stderr' in error) {
+      const stderr = String(error.stderr ?? '').trim();
+      if (stderr) {
+        throw new Error(stderr);
+      }
     }
     throw error;
   } finally {
@@ -458,6 +464,28 @@ async function runInventoryPhotoOcr(buffer, originalName) {
 
 function sanitizeFileName(value) {
   return String(value ?? 'inventory_photo.jpg').replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+}
+
+function parsePythonJsonOutput(stdout) {
+  const output = String(stdout ?? '').trim();
+  if (!output) {
+    throw new SyntaxError('Empty OCR worker output');
+  }
+
+  const lines = output
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (!line.startsWith('{') || !line.endsWith('}')) {
+      continue;
+    }
+    return JSON.parse(line);
+  }
+
+  return JSON.parse(output);
 }
 
 async function resolvePythonCommand() {
