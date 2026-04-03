@@ -189,3 +189,9 @@ Before next release:
 - further OCR quality tuning is still needed for occasional product-name noise on difficult rows
 - operator workflow with smartphone barcode scanning and quantity input should be tested end-to-end
 - temp-save restore behavior for OCR rows should be checked on actual mobile devices
+
+## Latest Update Note 3
+- iPhone saved-photo flow now needs real-device verification with `.heic` inputs after installing updated Python requirements on Ubuntu
+- deployment/server owners should run `python3 -m pip install -r requirements.txt`
+- if OCR still fails in production, check Ubuntu system packages for Tesseract and image libs before changing frontend code
+- after server dependency install, verify both `카메라 촬영` and `기존 사진 선택` on iPhone Safari

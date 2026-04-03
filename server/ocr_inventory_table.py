@@ -8,6 +8,12 @@ from pathlib import Path
 import cv2
 import numpy as np
 import pytesseract
+from PIL import Image
+
+try:
+    from pillow_heif import register_heif_opener
+except ImportError:
+    register_heif_opener = None
 
 
 KOREAN_RE = re.compile(r"[가-힣]")
@@ -50,7 +56,7 @@ def main() -> int:
 
     configure_tesseract()
 
-    image = cv2.imdecode(np.fromfile(str(image_path), dtype=np.uint8), cv2.IMREAD_COLOR)
+    image = load_image(image_path)
     if image is None:
         print(json.dumps({"error": "image decode failed"}, ensure_ascii=False))
         return 1
@@ -71,6 +77,27 @@ def configure_tesseract() -> None:
     tessdata_dir = Path(__file__).with_name("tessdata")
     if tessdata_dir.exists():
         os.environ["TESSDATA_PREFIX"] = str(tessdata_dir)
+
+
+def load_image(image_path: Path) -> np.ndarray | None:
+    image = cv2.imdecode(np.fromfile(str(image_path), dtype=np.uint8), cv2.IMREAD_COLOR)
+    if image is not None:
+        return image
+
+    suffix = image_path.suffix.lower()
+    if suffix not in {".heic", ".heif"}:
+        return None
+
+    if register_heif_opener is None:
+        raise RuntimeError("HEIC support is not installed. Install pillow-heif.")
+
+    register_heif_opener()
+
+    with Image.open(image_path) as heic_image:
+        rgb_image = heic_image.convert("RGB")
+        image_array = np.array(rgb_image)
+
+    return cv2.cvtColor(image_array, cv2.COLOR_RGB2BGR)
 
 
 def deskew_document(image: np.ndarray) -> np.ndarray:

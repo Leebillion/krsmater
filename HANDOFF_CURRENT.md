@@ -187,6 +187,14 @@ curl http://localhost:3100/api/health
 curl http://localhost:3100/api/bundles/report
 ```
 
+## Latest Update Note 3
+- photo OCR input now exposes both `카메라 촬영` and `기존 사진 선택`
+- server OCR python command resolution was split into `server/pythonResolver.js`
+- local or deployed server startup can use `PYTHON_EXECUTABLE` when Python is not discoverable on PATH
+- added root `requirements.txt` for Ubuntu OCR dependency setup
+- `server/ocr_inventory_table.py` now supports `.heic` / `.heif` image loading through a Pillow fallback path
+- Ubuntu servers still need system packages such as `tesseract-ocr`, `tesseract-ocr-kor`, `tesseract-ocr-eng`, `libgl1`, and `libglib2.0-0`
+
 ## Latest Update Note
 - convert tab is now active in the main menu as `변환`
 - accepted input files: `.xlsx`, `.xls`, `.csv`
