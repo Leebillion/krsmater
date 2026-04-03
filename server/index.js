@@ -27,6 +27,7 @@ const app = express();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 25 * 1024 * 1024 } });
 const port = Number(process.env.PORT ?? 3100);
 const execFileAsync = promisify(execFile);
+let resolvedPythonCommandPromise = null;
 
 app.use(cors());
 app.use(express.json({ limit: '1mb' }));
@@ -421,7 +422,11 @@ async function runInventoryPhotoOcr(buffer, originalName) {
 
   try {
     await fs.writeFile(inputPath, buffer);
-    const { stdout, stderr } = await execFileAsync('python', [scriptPath, inputPath], {
+    const pythonCommand = await resolvePythonCommand();
+    const pythonArgs = pythonCommand === 'py'
+      ? ['-3', scriptPath, inputPath]
+      : [scriptPath, inputPath];
+    const { stdout, stderr } = await execFileAsync(pythonCommand, pythonArgs, {
       cwd: process.cwd(),
       maxBuffer: 10 * 1024 * 1024,
       env: {
@@ -451,4 +456,40 @@ async function runInventoryPhotoOcr(buffer, originalName) {
 
 function sanitizeFileName(value) {
   return String(value ?? 'inventory_photo.jpg').replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+}
+
+async function resolvePythonCommand() {
+  if (!resolvedPythonCommandPromise) {
+    resolvedPythonCommandPromise = findPythonCommand();
+  }
+  return resolvedPythonCommandPromise;
+}
+
+async function findPythonCommand() {
+  const candidates = [
+    process.env.PYTHON_EXECUTABLE,
+    'python',
+    'py',
+    path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python313', 'python.exe'),
+    path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python310', 'python.exe'),
+    path.join('C:', 'Program Files', 'Python313', 'python.exe'),
+    path.join('C:', 'Program Files', 'Python310', 'python.exe'),
+  ].filter(Boolean);
+
+  for (const candidate of candidates) {
+    try {
+      if (candidate.endsWith('.exe')) {
+        await fs.access(candidate);
+        return candidate;
+      }
+
+      const args = candidate === 'py' ? ['-3', '--version'] : ['--version'];
+      await execFileAsync(candidate, args, { timeout: 5000 });
+      return candidate;
+    } catch {
+      // Try next candidate.
+    }
+  }
+
+  throw new Error('Python 실행 파일을 찾지 못했습니다. PYTHON_EXECUTABLE 또는 PATH를 확인해 주세요.');
 }
