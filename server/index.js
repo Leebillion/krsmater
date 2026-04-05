@@ -222,6 +222,9 @@ app.post('/api/convert/inventory-photo', upload.single('photoFile'), async (req,
     }
 
     const result = await runInventoryPhotoOcr(req.file.buffer, req.file.originalname);
+    if (result.engine?.path) {
+      console.info(`[OCR] engine=${result.engine.name ?? 'unknown'} path=${result.engine.path} file=${req.file.originalname}`);
+    }
     res.json({
       ok: true,
       summary: {
@@ -231,6 +234,7 @@ app.post('/api/convert/inventory-photo', upload.single('photoFile'), async (req,
       },
       items: result.items,
       warnings: result.warnings,
+      engine: result.engine ?? null,
     });
   } catch (error) {
     next(error);

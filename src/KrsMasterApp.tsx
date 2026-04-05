@@ -136,6 +136,9 @@ export default function KrsMasterApp() {
   const [photoWarnings, setPhotoWarnings] = useState<string[]>([]);
   const [photoSaveBusy, setPhotoSaveBusy] = useState(false);
   const [photoProgress, setPhotoProgress] = useState(0);
+  const [photoPreviewUrl, setPhotoPreviewUrl] = useState<string | null>(null);
+  const [photoPreviewName, setPhotoPreviewName] = useState<string | null>(null);
+  const [photoPreviewMeta, setPhotoPreviewMeta] = useState<string | null>(null);
   const [bundleReportRows, setBundleReportRows] = useState<BundleReportRow[]>([]);
   const [bundleReportRowsBusy, setBundleReportRowsBusy] = useState(false);
   const [bundleReportRowsMessage, setBundleReportRowsMessage] = useState<string | null>(null);
@@ -267,6 +270,12 @@ export default function KrsMasterApp() {
 
     return () => window.clearInterval(timer);
   }, [photoBusy]);
+
+  useEffect(() => {
+    return () => {
+      if (photoPreviewUrl) URL.revokeObjectURL(photoPreviewUrl);
+    };
+  }, [photoPreviewUrl]);
 
   useEffect(() => {
     const handleUpdateReady = () => setUpdateBanner('updateReady');
@@ -629,6 +638,21 @@ export default function KrsMasterApp() {
   };
 
   const convertInventoryPhoto = async (file: File) => {
+    const isImage = file.type.startsWith('image/');
+    const isPdf = file.type === 'application/pdf' || file.name.toLowerCase().endsWith('.pdf');
+
+    if (!isImage && !isPdf) {
+      setPhotoMessage('이미지 또는 PDF 파일만 업로드할 수 있습니다.');
+      return;
+    }
+
+    setPhotoPreviewName(file.name);
+    setPhotoPreviewMeta(`${isPdf ? 'PDF 문서' : '이미지'} / ${(file.size / (1024 * 1024)).toFixed(2)}MB`);
+    setPhotoPreviewUrl((prev) => {
+      if (prev) URL.revokeObjectURL(prev);
+      return isImage ? URL.createObjectURL(file) : null;
+    });
+
     try {
       setPhotoBusy(true);
       setPhotoProgress(8);
@@ -811,7 +835,7 @@ export default function KrsMasterApp() {
           {view === 'search' && <SearchPanel query={query} setQuery={setQuery} onSearch={runSearch} onClear={() => { setQuery(''); setSubmittedQuery(''); }} validationMessage={searchValidation.message} searchEnabled={searchValidation.canSearch} />}
           {view === 'import' && <ImportPanel inputRef={inputRef} uploading={uploading} uploadMessage={uploadMessage} onChoose={() => inputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await saveMasterFile(file); event.target.value = ''; }} />}
           {view === 'bundle' && <BundlePanel bundleTab={bundleTab} setBundleTab={setBundleTab} onOpenReportStatus={() => void openBundleReportStatus()} bundleForm={bundleForm} setBundleForm={setBundleForm} bundleReportBusy={bundleReportBusy} bundleReportMessage={bundleReportMessage} onSave={saveBundleReport} onDownload={downloadBundleDb} bundleReportRows={bundleReportRows} bundleReportRowsBusy={bundleReportRowsBusy} bundleReportRowsMessage={bundleReportRowsMessage} editingReportId={editingReportId} editingReportForm={editingReportForm} setEditingReportForm={setEditingReportForm} onRefreshReportRows={() => void loadBundleReportRows()} onStartEdit={startEditBundleReport} onCancelEdit={cancelEditBundleReport} onSaveEdit={() => void saveEditedBundleReport()} onDelete={(id) => void removeBundleReport(id)} bundleMasterInputRef={bundleMasterInputRef} bundleMasterBusy={bundleMasterBusy} bundleMasterMessage={bundleMasterMessage} bundleMasterSummary={bundleMasterSummary} onPickBundleMaster={() => bundleMasterInputRef.current?.click()} onBundleMasterFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await uploadBundleMasterFile(file); event.target.value = ''; }} bundleLookupQuery={bundleLookupQuery} setBundleLookupQuery={setBundleLookupQuery} bundleLookupItems={bundleLookupItems} bundleLookupBusy={bundleLookupBusy} bundleLookupMessage={bundleLookupMessage} onLookup={() => void loadBundleLookup(bundleLookupQuery)} />}
-          {view === 'convert' && <ConvertPanel inputRef={convertInputRef} busy={convertBusy} message={convertMessage} summary={convertSummary} items={filteredConvertedItems} totalItems={convertedItems.length} warnings={convertWarnings} query={convertQuery} setQuery={setConvertQuery} onChoose={() => convertInputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertFileToBarcodeList(file); event.target.value = ''; }} photoInputRef={photoInputRef} photoGalleryInputRef={photoGalleryInputRef} photoBusy={photoBusy} photoMessage={photoMessage} photoSummary={photoSummary} photoRows={photoRows} photoWarnings={photoWarnings} onChoosePhoto={() => photoInputRef.current?.click()} onChoosePhotoFromLibrary={() => photoGalleryInputRef.current?.click()} onPhotoFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertInventoryPhoto(file); event.target.value = ''; }} onChangePhotoRow={updatePhotoRow} onDownloadPhotoRows={downloadPhotoRowsAsExcel} onSavePhotoRows={savePhotoRowsToDevice} onClearPhotoRows={clearSavedPhotoRows} photoSaveBusy={photoSaveBusy} photoProgress={photoProgress} masterRecordByBarcode={masterRecordByBarcode} />}
+          {view === 'convert' && <ConvertPanel inputRef={convertInputRef} busy={convertBusy} message={convertMessage} summary={convertSummary} items={filteredConvertedItems} totalItems={convertedItems.length} warnings={convertWarnings} query={convertQuery} setQuery={setConvertQuery} onChoose={() => convertInputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertFileToBarcodeList(file); event.target.value = ''; }} photoInputRef={photoInputRef} photoGalleryInputRef={photoGalleryInputRef} photoBusy={photoBusy} photoMessage={photoMessage} photoSummary={photoSummary} photoRows={photoRows} photoWarnings={photoWarnings} onChoosePhoto={() => photoInputRef.current?.click()} onChoosePhotoFromLibrary={() => photoGalleryInputRef.current?.click()} onPhotoFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertInventoryPhoto(file); event.target.value = ''; }} onChangePhotoRow={updatePhotoRow} onDownloadPhotoRows={downloadPhotoRowsAsExcel} onSavePhotoRows={savePhotoRowsToDevice} onClearPhotoRows={clearSavedPhotoRows} photoSaveBusy={photoSaveBusy} photoProgress={photoProgress} photoPreviewUrl={photoPreviewUrl} photoPreviewName={photoPreviewName} photoPreviewMeta={photoPreviewMeta} masterRecordByBarcode={masterRecordByBarcode} />}
           {(view === 'scanner' || view === 'search') && <MatchSection exactMatch={exactMatch} similarMatches={similarMatches} emptyMessage={searchEmptyMessage} />}
         </div>
         <aside className="space-y-6">
@@ -909,6 +933,9 @@ function ConvertPanel(props: {
   onClearPhotoRows: () => void;
   photoSaveBusy: boolean;
   photoProgress: number;
+  photoPreviewUrl: string | null;
+  photoPreviewName: string | null;
+  photoPreviewMeta: string | null;
   masterRecordByBarcode: Map<string, MasterRecord>;
 }) {
   const photoProgressLabel = props.photoProgress < 25
@@ -918,6 +945,12 @@ function ConvertPanel(props: {
       : props.photoProgress < 85
         ? 'OCR 분석 중'
         : '결과 정리 중';
+  const photoProgressSteps = [
+    { label: '파일 확인', done: props.photoProgress >= 8, active: props.photoProgress > 0 && props.photoProgress < 25 },
+    { label: '문서 보정', done: props.photoProgress >= 55, active: props.photoProgress >= 25 && props.photoProgress < 55 },
+    { label: 'OCR 추출', done: props.photoProgress >= 85, active: props.photoProgress >= 55 && props.photoProgress < 85 },
+    { label: '결과 정리', done: props.photoProgress >= 100, active: props.photoProgress >= 85 && props.photoProgress < 100 },
+  ];
 
   return (
     <section className="space-y-6">
@@ -950,10 +983,38 @@ function ConvertPanel(props: {
             <div className="h-3 overflow-hidden rounded-full bg-[#dce6f0]">
               <div className="h-full rounded-full bg-[#174f83] transition-[width] duration-300" style={{ width: `${Math.min(props.photoProgress, 99)}%` }} />
             </div>
+            <div className="mt-3 flex flex-wrap gap-2">
+              {photoProgressSteps.map((step) => (
+                <span
+                  key={step.label}
+                  className={`rounded-full px-3 py-1 text-xs font-semibold ${
+                    step.done
+                      ? 'bg-[#dff3e3] text-[#005c29]'
+                      : step.active
+                        ? 'bg-[#d1e4ff] text-[#002542]'
+                        : 'bg-white text-[#5b6670]'
+                  }`}
+                >
+                  {step.label}
+                </span>
+              ))}
+            </div>
           </div>
         )}
         {props.photoMessage && !props.photoBusy && <div className="mt-4 rounded-[1.5rem] border border-[#dce6f0] bg-[#f8fbfd] p-4 text-sm text-[#5b6670]">{props.photoMessage}</div>}
         {props.photoSummary && <div className="mt-4 rounded-[1.5rem] bg-[#edf4fb] p-4 text-sm text-[#002542]">{props.photoSummary.fileName} / {props.photoSummary.recordCount.toLocaleString()}건 / {formatDate(props.photoSummary.importedAt)}</div>}
+        {(props.photoPreviewName || props.photoPreviewUrl) && (
+          <div className="mt-4 rounded-[1.5rem] border border-[#dce6f0] bg-white p-4">
+            <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+              <p className="font-semibold text-[#171c1f]">업로드 확인</p>
+              {props.photoPreviewMeta && <span className="rounded-full bg-[#edf4fb] px-3 py-1 text-xs font-semibold text-[#002542]">{props.photoPreviewMeta}</span>}
+            </div>
+            {props.photoPreviewName && <p className="mb-3 text-sm text-[#5b6670]">{props.photoPreviewName}</p>}
+            {props.photoPreviewUrl
+              ? <img src={props.photoPreviewUrl} alt={props.photoPreviewName ?? '업로드 이미지'} className="max-h-[24rem] w-full rounded-[1.25rem] border border-[#dce6f0] object-contain" />
+              : <div className="rounded-[1.25rem] border border-dashed border-[#d6e0ea] bg-[#f8fbfd] px-4 py-6 text-sm text-[#5b6670]">PDF는 미리보기 대신 바로 서버 OCR로 전달됩니다.</div>}
+          </div>
+        )}
       </Panel>
 
       <section className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">

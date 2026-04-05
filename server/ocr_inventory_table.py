@@ -56,7 +56,7 @@ def main() -> int:
             print(json.dumps({"error": "image file not found"}, ensure_ascii=False))
             return 1
 
-        configure_tesseract()
+        engine_path = configure_tesseract()
 
         images = load_images(image_path)
         if not images:
@@ -65,17 +65,27 @@ def main() -> int:
 
         rows, warnings = run_ocr_for_images(images)
 
-        print(json.dumps({"ok": True, "items": rows, "warnings": warnings}, ensure_ascii=False))
+        print(json.dumps({
+            "ok": True,
+            "items": rows,
+            "warnings": warnings,
+            "engine": {
+                "name": "tesseract",
+                "path": engine_path,
+            },
+        }, ensure_ascii=False))
         return 0
     except Exception as error:
         print(json.dumps({"error": format_runtime_error(error)}, ensure_ascii=False))
         return 1
 
 
-def configure_tesseract() -> None:
+def configure_tesseract() -> str:
+    selected_path = ""
     for candidate in TESSERACT_CANDIDATES:
         if candidate and Path(candidate).exists():
             pytesseract.pytesseract.tesseract_cmd = candidate
+            selected_path = str(Path(candidate))
             break
 
     tessdata_dir = Path(__file__).with_name("tessdata")
@@ -89,6 +99,9 @@ def configure_tesseract() -> None:
             "Tesseract OCR is not available. Install Tesseract and the Korean/English language data, "
             "or set TESSERACT_CMD to the tesseract executable path."
         ) from error
+
+    configured = getattr(pytesseract.pytesseract, "tesseract_cmd", "") or selected_path
+    return str(configured)
 
 
 def load_images(image_path: Path) -> list[np.ndarray]:
@@ -282,9 +295,14 @@ def build_ocr_variants(image: np.ndarray) -> list[tuple[str, np.ndarray]]:
 
 def build_column_focus_variants(image: np.ndarray) -> list[tuple[str, np.ndarray]]:
     content = crop_to_content_bounds(image)
+    aggressive = crop_to_table_bounds_aggressive(image)
     variants: list[tuple[str, np.ndarray]] = []
-    sources = [("content", content)] if content is not None else []
-    if content is None:
+    sources: list[tuple[str, np.ndarray]] = []
+    if aggressive is not None:
+        sources.append(("table", aggressive))
+    if content is not None and not images_have_similar_shape(content, aggressive):
+        sources.append(("content", content))
+    if not sources:
         sources.append(("full", image))
 
     for source_name, source_image in sources:
@@ -337,6 +355,73 @@ def crop_to_content_bounds(image: np.ndarray) -> np.ndarray | None:
     right = min(image_width, x + w + pad_x)
     bottom = min(image_height, y + h + pad_y)
     return image[top:bottom, left:right]
+
+
+def crop_to_table_bounds_aggressive(image: np.ndarray) -> np.ndarray | None:
+    content = crop_to_content_bounds(image)
+    working = content if content is not None else image
+
+    gray = cv2.cvtColor(working, cv2.COLOR_BGR2GRAY)
+    threshold = cv2.adaptiveThreshold(
+        gray,
+        255,
+        cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+        cv2.THRESH_BINARY_INV,
+        31,
+        9,
+    )
+    horizontal_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (25, 3))
+    vertical_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (3, 25))
+    lines = cv2.morphologyEx(threshold, cv2.MORPH_CLOSE, horizontal_kernel, iterations=1)
+    lines = cv2.bitwise_or(lines, cv2.morphologyEx(threshold, cv2.MORPH_CLOSE, vertical_kernel, iterations=1))
+    lines = cv2.dilate(lines, np.ones((5, 5), np.uint8), iterations=2)
+
+    contours, _ = cv2.findContours(lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return content
+
+    image_height, image_width = working.shape[:2]
+    best_rect: tuple[int, int, int, int] | None = None
+    best_score = -1.0
+    for contour in contours:
+        x, y, w, h = cv2.boundingRect(contour)
+        area_ratio = (w * h) / float(image_width * image_height)
+        if area_ratio < 0.03:
+            continue
+        aspect_bonus = 1.2 if w > h else 1.0
+        score = area_ratio * aspect_bonus
+        if score > best_score:
+            best_score = score
+            best_rect = (x, y, w, h)
+
+    if best_rect is None:
+        return content
+
+    x, y, w, h = best_rect
+    if w < image_width * 0.18 or h < image_height * 0.12:
+        return content
+
+    pad_x = max(12, int(w * 0.03))
+    pad_y = max(12, int(h * 0.05))
+    left = max(0, x - pad_x)
+    top = max(0, y - pad_y)
+    right = min(image_width, x + w + pad_x)
+    bottom = min(image_height, y + h + pad_y)
+    return working[top:bottom, left:right]
+
+
+def images_have_similar_shape(first: np.ndarray | None, second: np.ndarray | None) -> bool:
+    if first is None or second is None:
+        return False
+
+    first_height, first_width = first.shape[:2]
+    second_height, second_width = second.shape[:2]
+    if first_height == 0 or first_width == 0 or second_height == 0 or second_width == 0:
+        return False
+
+    width_ratio = min(first_width, second_width) / max(first_width, second_width)
+    height_ratio = min(first_height, second_height) / max(first_height, second_height)
+    return width_ratio >= 0.9 and height_ratio >= 0.9
 
 
 def upscale_for_ocr(image: np.ndarray, target_width: int = 1600) -> np.ndarray:
@@ -563,6 +648,214 @@ def reindex_rows(rows: list[dict]) -> list[dict]:
 
 def dedupe_warnings(warnings: list[str]) -> list[str]:
     return list(dict.fromkeys(warnings))
+
+
+def score_name_quality(name: str) -> int:
+    cleaned = clean_name(name)
+    if not cleaned:
+        return -3
+
+    score = 0
+    korean_chars = re.findall(r"[가-힣]", cleaned)
+    tokens = [token for token in cleaned.split(" ") if token]
+    single_char_tokens = [token for token in tokens if len(token) == 1]
+
+    if len(korean_chars) >= 4:
+        score += 5
+    elif len(korean_chars) >= 2:
+        score += 2
+    if re.search(r"[가-힣]{3,}", cleaned):
+        score += 5
+    if 4 <= len(cleaned) <= 32:
+        score += 2
+    if tokens and len(single_char_tokens) / len(tokens) > 0.55:
+        score -= 6
+    score -= len(re.findall(r"[^0-9A-Za-z가-힣()\sL]", cleaned))
+    return score
+
+
+def score_candidate_rows(rows: list[dict]) -> int:
+    if not rows:
+        return -1000
+
+    unique_barcodes: set[str] = set()
+    score = 0
+    valid_13_count = 0
+    for row in rows:
+        barcode = re.sub(r"\D", "", row.get("barcode", ""))
+        name = row.get("name", "")
+        if len(barcode) == 13:
+            score += 48
+            valid_13_count += 1
+        elif len(barcode) >= 8:
+            score -= 30
+        else:
+            score -= 40
+
+        if barcode not in unique_barcodes:
+            unique_barcodes.add(barcode)
+            score += 3
+
+        score += max(-6, min(8, score_name_quality(name)))
+
+    score += valid_13_count * 12
+    score += len(unique_barcodes) * 2
+    score -= max(0, len(rows) - len(unique_barcodes)) * 5
+    return score
+
+
+def extract_text_rows_fast(image: np.ndarray) -> tuple[list[dict], list[str]]:
+    working = resize_for_processing(image, max_size=2200)
+    text = pytesseract.image_to_string(working, lang="kor+eng", config="--oem 3 --psm 6")
+
+    rows: list[dict] = []
+    warnings: list[str] = []
+    header_found = False
+
+    for raw_line in text.splitlines():
+        line = normalize_line(raw_line)
+        if not line:
+            continue
+        if "상품코드" in line and "상품명" in line:
+            header_found = True
+            continue
+        rows.extend(parse_text_line(line))
+
+    if not header_found:
+        warnings.append("헤더 행을 찾지 못해 자동 추정으로 처리했습니다.")
+
+    return reindex_rows(merge_rows_by_barcode(rows)), warnings
+
+
+def build_candidate(name: str, rows: list[dict], warnings: list[str], source: str) -> dict:
+    merged_rows = reindex_rows(merge_rows_by_barcode(rows))
+    orientation = name
+    for marker in ("_table", "_content", "_left_", "_mid"):
+        if marker in orientation:
+            orientation = orientation.split(marker, 1)[0]
+    return {
+        "name": name,
+        "orientation": orientation,
+        "rows": merged_rows,
+        "warnings": dedupe_warnings(warnings),
+        "score": score_candidate_rows(merged_rows),
+        "source": source,
+    }
+
+
+def select_best_candidate(candidates: list[dict]) -> dict | None:
+    if not candidates:
+        return None
+    return max(candidates, key=lambda candidate: candidate["score"])
+
+
+def is_confident_candidate(candidate: dict | None) -> bool:
+    if not candidate:
+        return False
+
+    rows = candidate["rows"]
+    count_13 = sum(1 for row in rows if len(row.get("barcode", "")) == 13)
+    good_names = sum(1 for row in rows if score_name_quality(row.get("name", "")) >= 8)
+    return count_13 >= 8 and good_names >= max(4, count_13 // 2)
+
+
+def finalize_candidate(candidate: dict | None) -> tuple[list[dict], list[str]]:
+    if candidate is None:
+        return [], ["OCR 결과가 없습니다."]
+
+    rows = list(candidate["rows"])
+    warnings = list(candidate["warnings"])
+    if len(rows) < 14:
+        warnings.append("일부 행은 OCR 품질 문제로 누락되거나 불완전할 수 있어 표에서 직접 수정이 필요합니다.")
+    return rows, dedupe_warnings(warnings)
+
+
+def build_orientation_variants(image: np.ndarray) -> list[tuple[str, np.ndarray]]:
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    return [
+        ("base", image),
+        ("rot_cw", cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE)),
+        ("rot_ccw", cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE)),
+        ("rot_180", cv2.rotate(image, cv2.ROTATE_180)),
+        ("gray", cv2.cvtColor(gray, cv2.COLOR_GRAY2BGR)),
+    ]
+
+
+def build_detailed_ocr_variants(image: np.ndarray, preferred_orientations: list[str] | None = None) -> list[tuple[str, np.ndarray]]:
+    orientation_variants = build_orientation_variants(image)
+    allowed_orientations = set(preferred_orientations or [name for name, _ in orientation_variants[:2]])
+    variants: list[tuple[str, np.ndarray]] = []
+
+    for variant_name, variant_image in orientation_variants:
+        if variant_name == "gray" or variant_name not in allowed_orientations:
+            continue
+        variants.append((variant_name, variant_image))
+        focused = build_column_focus_variants(variant_image)
+        for focus_name, focus_image in focused:
+            variants.append((f"{variant_name}_{focus_name}", focus_image))
+
+    return variants
+
+
+def evaluate_fast_candidates(orientation_variants: list[tuple[str, np.ndarray]]) -> list[dict]:
+    candidates: list[dict] = []
+    for variant_name, variant_image in orientation_variants:
+        rows, warnings = extract_text_rows_fast(variant_image)
+        candidates.append(build_candidate(variant_name, rows, warnings, source="fast"))
+
+        content = crop_to_content_bounds(variant_image)
+        if content is not None:
+            crop_rows, crop_warnings = extract_text_rows_fast(content)
+            candidates.append(build_candidate(f"{variant_name}_content", crop_rows, crop_warnings, source="fast"))
+        aggressive = crop_to_table_bounds_aggressive(variant_image)
+        if aggressive is not None and not images_have_similar_shape(content, aggressive):
+            table_rows, table_warnings = extract_text_rows_fast(aggressive)
+            candidates.append(build_candidate(f"{variant_name}_table", table_rows, table_warnings, source="fast"))
+    return candidates
+
+
+def evaluate_detailed_candidates(variants: list[tuple[str, np.ndarray]]) -> list[dict]:
+    candidates: list[dict] = []
+    for variant_name, variant_image in variants:
+        rows, warnings = extract_text_rows(variant_image)
+        candidates.append(build_candidate(variant_name, rows, warnings, source="detailed"))
+    return candidates
+
+
+def best_ocr_result(image: np.ndarray) -> tuple[list[dict], list[str]]:
+    orientation_variants = build_orientation_variants(image)
+    fast_candidates = evaluate_fast_candidates(orientation_variants)
+    best_candidate = select_best_candidate(fast_candidates)
+
+    if is_confident_candidate(best_candidate):
+        return finalize_candidate(best_candidate)
+
+    preferred_orientations = [
+        candidate["orientation"]
+        for candidate in sorted(fast_candidates, key=lambda item: item["score"], reverse=True)[:2]
+    ]
+    variants = build_detailed_ocr_variants(image, preferred_orientations)
+    detailed_candidates = evaluate_detailed_candidates(variants)
+    detailed_best = select_best_candidate(detailed_candidates)
+    if detailed_best and (best_candidate is None or detailed_best["score"] > best_candidate["score"]):
+        best_candidate = detailed_best
+
+    if not is_confident_candidate(best_candidate):
+        token_candidates: list[dict] = []
+        for _, variant in variants[:4]:
+            token_rows, _ = extract_rows_from_tokens(extract_tokens(variant), variant.shape[1])
+            token_candidates.extend(token_rows)
+
+        token_merged = build_candidate(
+            "token_merge",
+            list(best_candidate["rows"]) + token_candidates if best_candidate else token_candidates,
+            list(best_candidate["warnings"]) if best_candidate else ["OCR 결과가 없습니다."],
+            source="token_merge",
+        )
+        if best_candidate is None or token_merged["score"] > best_candidate["score"]:
+            best_candidate = token_merged
+
+    return finalize_candidate(best_candidate)
 
 
 def format_runtime_error(error: Exception) -> str:
