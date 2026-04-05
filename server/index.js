@@ -425,10 +425,12 @@ async function runInventoryPhotoOcr(buffer, originalName) {
   const tempDir = await fs.mkdtemp(path.join(os.tmpdir(), 'krs-photo-ocr-'));
   const inputPath = path.join(tempDir, sanitizeFileName(originalName || 'inventory_photo.jpg'));
   const scriptPath = path.join(process.cwd(), 'server', 'ocr_inventory_table.py');
+  const startedAt = Date.now();
 
   try {
     await fs.writeFile(inputPath, buffer);
     const pythonCommand = await resolvePythonCommand();
+    console.info(`[OCR] request_start file=${originalName} python=${pythonCommand}`);
     const pythonArgs = pythonCommand === 'py'
       ? ['-3', scriptPath, inputPath]
       : [scriptPath, inputPath];
@@ -446,9 +448,17 @@ async function runInventoryPhotoOcr(buffer, originalName) {
       throw new Error(payload.error || String(stderr || '').trim() || 'OCR 처리에 실패했습니다.');
     }
 
+    const stderrText = String(stderr ?? '').trim();
+    if (stderrText) {
+      for (const line of stderrText.split(/\r?\n/)) {
+        if (line.trim()) console.info(line.trim());
+      }
+    }
+    console.info(`[OCR] request_complete file=${originalName} rows=${Array.isArray(payload.items) ? payload.items.length : 0} elapsedMs=${Date.now() - startedAt}`);
     return {
       items: Array.isArray(payload.items) ? payload.items : [],
       warnings: Array.isArray(payload.warnings) ? payload.warnings : [],
+      engine: payload.engine ?? null,
     };
   } catch (error) {
     if (error instanceof SyntaxError) {
@@ -505,6 +515,10 @@ async function resolvePythonCommand() {
 async function findPythonCommand() {
   const candidates = [
     process.env.PYTHON_EXECUTABLE,
+    process.platform === 'win32' ? null : '/usr/bin/python3',
+    process.platform === 'win32' ? null : '/usr/local/bin/python3',
+    process.platform === 'win32' ? null : '/opt/homebrew/bin/python3',
+    'python3',
     'python',
     'py',
     path.join(os.homedir(), 'AppData', 'Local', 'Programs', 'Python', 'Python313', 'python.exe'),

@@ -658,7 +658,11 @@ export default function KrsMasterApp() {
       setPhotoProgress(8);
       setPhotoMessage(null);
       const result = await uploadInventoryPhoto(file);
-      setPhotoRows((prev) => mergePhotoRows(prev, result.items));
+      const hydratedRows = result.items.map((item) => ({
+        ...item,
+        name: masterRecordByBarcode.get(item.barcode)?.name ?? item.name,
+      }));
+      setPhotoRows((prev) => mergePhotoRows(prev, hydratedRows));
       setPhotoSummary((prev) => ({
         fileName: prev ? `${prev.fileName}, ${result.summary.fileName}` : result.summary.fileName,
         importedAt: result.summary.importedAt,
@@ -681,9 +685,17 @@ export default function KrsMasterApp() {
   const updatePhotoRow = (index: number, key: 'barcode' | 'name', value: string) => {
     setPhotoRows((prev) => prev.map((row, rowIndex) => {
       if (rowIndex !== index) return row;
+      if (key === 'barcode') {
+        const barcode = value.replace(/\D/g, '');
+        return {
+          ...row,
+          barcode,
+          name: masterRecordByBarcode.get(barcode)?.name ?? row.name,
+        };
+      }
       return {
         ...row,
-        [key]: key === 'barcode' ? value.replace(/\D/g, '') : value,
+        [key]: value,
       };
     }));
   };

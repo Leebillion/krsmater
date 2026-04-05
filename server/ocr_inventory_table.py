@@ -2,6 +2,7 @@ import json
 import os
 import re
 import sys
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -9,7 +10,6 @@ import cv2
 import numpy as np
 import pytesseract
 from PIL import Image
-import pypdfium2 as pdfium
 
 try:
     from pillow_heif import register_heif_opener
@@ -25,6 +25,7 @@ TESSERACT_CANDIDATES = [
     r"C:\Program Files\Tesseract-OCR\tesseract.exe",
     r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
 ]
+OCR_TIME_LIMIT_SECONDS = 60.0
 
 
 @dataclass
@@ -47,6 +48,7 @@ class Token:
 
 def main() -> int:
     try:
+        started_at = time.monotonic()
         if len(sys.argv) < 2:
             print(json.dumps({"error": "image path is required"}, ensure_ascii=False))
             return 1
@@ -57,13 +59,17 @@ def main() -> int:
             return 1
 
         engine_path = configure_tesseract()
+        log_ocr_stage(f"engine_ready path={engine_path}")
 
         images = load_images(image_path)
         if not images:
             print(json.dumps({"error": "image decode failed"}, ensure_ascii=False))
             return 1
+        log_ocr_stage(f"input_loaded pages={len(images)}")
 
         rows, warnings = run_ocr_for_images(images)
+        total_ms = round((time.monotonic() - started_at) * 1000)
+        log_ocr_stage(f"complete rows={len(rows)} warnings={len(warnings)} elapsedMs={total_ms}")
 
         print(json.dumps({
             "ok": True,
@@ -104,6 +110,10 @@ def configure_tesseract() -> str:
     return str(configured)
 
 
+def log_ocr_stage(message: str) -> None:
+    print(f"[OCR] {message}", file=sys.stderr, flush=True)
+
+
 def load_images(image_path: Path) -> list[np.ndarray]:
     suffix = image_path.suffix.lower()
     if suffix == ".pdf":
@@ -136,6 +146,13 @@ def load_single_image(image_path: Path) -> np.ndarray | None:
 
 def load_pdf_pages(pdf_path: Path) -> list[np.ndarray]:
     try:
+        import pypdfium2 as pdfium
+    except ImportError as error:
+        raise RuntimeError(
+            "PDF OCR requires pypdfium2. Install it with `pip install pypdfium2` in the OCR Python environment."
+        ) from error
+
+    try:
         document = pdfium.PdfDocument(str(pdf_path))
     except Exception as error:
         raise RuntimeError(
@@ -159,16 +176,24 @@ def load_pdf_pages(pdf_path: Path) -> list[np.ndarray]:
 def run_ocr_for_images(images: list[np.ndarray]) -> tuple[list[dict], list[str]]:
     all_rows: list[dict] = []
     warnings: list[str] = []
+    deadline = time.monotonic() + OCR_TIME_LIMIT_SECONDS
 
     for page_index, image in enumerate(images, start=1):
+        page_started_at = time.monotonic()
         corrected = deskew_document(image)
-        page_rows, page_warnings = best_ocr_result(corrected)
+        page_rows, page_warnings = best_ocr_result(corrected, deadline=deadline)
         all_rows.extend(page_rows)
         warnings.extend(
             [f"{page_index}페이지: {warning}" for warning in page_warnings]
             if len(images) > 1
             else page_warnings
         )
+        log_ocr_stage(
+            f"page={page_index} rows={len(page_rows)} warnings={len(page_warnings)} elapsedMs={round((time.monotonic() - page_started_at) * 1000)}"
+        )
+        if time.monotonic() >= deadline:
+            warnings.append("OCR 시간 제한에 도달해 빠른 상품코드 추출 결과만 반환했습니다.")
+            break
 
     merged_rows = reindex_rows(merge_rows_by_barcode(all_rows))
     return merged_rows, dedupe_warnings(warnings)
@@ -200,9 +225,6 @@ def deskew_document(image: np.ndarray) -> np.ndarray:
         document[:, 0] *= ratio_x
         document[:, 1] *= ratio_y
         corrected = four_point_transform(image, document)
-
-    if corrected.shape[1] > corrected.shape[0]:
-        corrected = cv2.rotate(corrected, cv2.ROTATE_90_CLOCKWISE)
 
     return corrected
 
@@ -822,39 +844,214 @@ def evaluate_detailed_candidates(variants: list[tuple[str, np.ndarray]]) -> list
     return candidates
 
 
-def best_ocr_result(image: np.ndarray) -> tuple[list[dict], list[str]]:
-    orientation_variants = build_orientation_variants(image)
-    fast_candidates = evaluate_fast_candidates(orientation_variants)
-    best_candidate = select_best_candidate(fast_candidates)
+def normalize_barcode_candidate(value: str) -> str:
+    digits = re.sub(r"\D", "", value or "")
+    if len(digits) < 13:
+        return ""
+    return digits[:13]
 
+
+def extract_barcode_rows_from_line(line: str) -> list[dict]:
+    rows: list[dict] = []
+    direct_matches = re.findall(r"(?<!\d)\d{13}(?!\d)", line)
+    for barcode in direct_matches:
+        rows.append({"barcode": barcode, "name": ""})
+    if rows:
+        return rows
+
+    compact = re.sub(r"[^\d]", "", line)
+    if len(compact) >= 13:
+        rows.append({"barcode": compact[:13], "name": ""})
+    return rows
+
+
+def extract_barcode_rows_fast(image: np.ndarray) -> tuple[list[dict], list[str]]:
+    started_at = time.monotonic()
+    working = resize_for_processing(image, max_size=1800)
+    rows: list[dict] = []
+    warnings: list[str] = []
+    variants = [working]
+    height, width = working.shape[:2]
+    if width >= 220:
+        for ratio in (0.35, 0.45, 0.55):
+            crop_width = int(width * ratio)
+            if crop_width >= 160:
+                variants.append(working[:, :crop_width])
+
+    for variant in variants:
+        threshold = preprocess_for_ocr(variant)
+        for psm in (6, 11):
+            text = pytesseract.image_to_string(threshold, lang="eng", config=f"--oem 3 --psm {psm}")
+            for raw_line in text.splitlines():
+                line = normalize_line(raw_line)
+                if not line:
+                    continue
+                rows.extend(extract_barcode_rows_from_line(line))
+
+    log_ocr_stage(f"stage=fast_barcode elapsedMs={round((time.monotonic() - started_at) * 1000)} rows={len(rows)}")
+    return reindex_rows(merge_rows_by_barcode(rows)), warnings
+
+
+def extract_barcode_rows_from_tokens(image: np.ndarray) -> tuple[list[dict], list[str]]:
+    started_at = time.monotonic()
+    variants = [image]
+    height, width = image.shape[:2]
+    if width >= 220:
+        for ratio in (0.35, 0.45):
+            crop_width = int(width * ratio)
+            if crop_width >= 160:
+                variants.append(image[:, :crop_width])
+
+    rows: list[dict] = []
+    for variant in variants:
+        threshold = preprocess_for_ocr(variant)
+        for psm in (6, 11):
+            data = pytesseract.image_to_data(
+                threshold,
+                lang="eng",
+                config=f"--oem 3 --psm {psm}",
+                output_type=pytesseract.Output.DICT,
+            )
+
+            tokens: list[Token] = []
+            total = len(data["text"])
+            for index in range(total):
+                raw_text = str(data["text"][index] or "")
+                digits = re.sub(r"\D", "", raw_text)
+                if not digits:
+                    continue
+                try:
+                    conf = float(data["conf"][index])
+                except Exception:
+                    conf = -1
+                if conf < 20:
+                    continue
+                tokens.append(
+                    Token(
+                        text=digits,
+                        x=int(data["left"][index]),
+                        y=int(data["top"][index]),
+                        w=int(data["width"][index]),
+                        h=int(data["height"][index]),
+                        conf=conf,
+                    )
+                )
+
+            if not tokens:
+                continue
+
+            variant_width = variant.shape[1]
+            lines = group_tokens_by_line(tokens)
+            for line in lines:
+                left_tokens = [token for token in line if token.center_x <= variant_width * 0.55]
+                if not left_tokens:
+                    continue
+                left_tokens.sort(key=lambda token: token.x)
+                joined = "".join(token.text for token in left_tokens)
+                barcode = normalize_barcode_candidate(joined)
+                if barcode:
+                    rows.append({"barcode": barcode, "name": ""})
+
+    if not rows:
+        return [], ["상품코드를 찾지 못했습니다."]
+
+    log_ocr_stage(f"stage=token_barcode elapsedMs={round((time.monotonic() - started_at) * 1000)} rows={len(rows)}")
+    return reindex_rows(merge_rows_by_barcode(rows)), []
+
+
+def score_candidate_rows(rows: list[dict]) -> int:
+    if not rows:
+        return -1000
+
+    unique_barcodes: set[str] = set()
+    score = 0
+    for row in rows:
+        barcode = re.sub(r"\D", "", row.get("barcode", ""))
+        if len(barcode) == 13:
+            score += 80
+        elif len(barcode) >= 8:
+            score -= 50
+        else:
+            score -= 100
+        if barcode not in unique_barcodes:
+            unique_barcodes.add(barcode)
+            score += 8
+
+    score += len(unique_barcodes) * 8
+    score -= max(0, len(rows) - len(unique_barcodes)) * 10
+    return score
+
+
+def is_confident_candidate(candidate: dict | None) -> bool:
+    if not candidate:
+        return False
+    rows = candidate["rows"]
+    count_13 = sum(1 for row in rows if len(row.get("barcode", "")) == 13)
+    return count_13 >= 8
+
+
+def finalize_candidate(candidate: dict | None) -> tuple[list[dict], list[str]]:
+    if candidate is None:
+        return [], ["OCR 결과가 없습니다."]
+
+    rows = list(candidate["rows"])
+    warnings = list(candidate["warnings"])
+    if len(rows) < 8:
+        warnings.append("상품코드 추출 수가 적어 일부 행은 직접 확인이 필요합니다.")
+    return rows, dedupe_warnings(warnings)
+
+
+def build_orientation_variants(image: np.ndarray) -> list[tuple[str, np.ndarray]]:
+    variants: list[tuple[str, np.ndarray]] = [("base", image)]
+    aggressive = crop_to_table_bounds_aggressive(image)
+    content = crop_to_content_bounds(image)
+    if aggressive is not None:
+        variants.append(("table", aggressive))
+    if content is not None and not images_have_similar_shape(content, aggressive):
+        variants.append(("content", content))
+    return variants
+
+
+def best_ocr_result(image: np.ndarray, deadline: float | None = None) -> tuple[list[dict], list[str]]:
+    overall_started_at = time.monotonic()
+    orientation_variants = build_orientation_variants(image)
+    candidates: list[dict] = []
+
+    for variant_name, variant_image in orientation_variants:
+        if deadline is not None and time.monotonic() >= deadline:
+            break
+        rows, warnings = extract_barcode_rows_fast(variant_image)
+        candidates.append(build_candidate(variant_name, rows, warnings, source="fast_barcode"))
+
+    best_candidate = select_best_candidate(candidates)
     if is_confident_candidate(best_candidate):
+        log_ocr_stage(
+            f"stage=best_ocr_result mode=fast_only elapsedMs={round((time.monotonic() - overall_started_at) * 1000)} rows={len(best_candidate['rows'])}"
+        )
         return finalize_candidate(best_candidate)
 
-    preferred_orientations = [
-        candidate["orientation"]
-        for candidate in sorted(fast_candidates, key=lambda item: item["score"], reverse=True)[:2]
-    ]
-    variants = build_detailed_ocr_variants(image, preferred_orientations)
-    detailed_candidates = evaluate_detailed_candidates(variants)
-    detailed_best = select_best_candidate(detailed_candidates)
-    if detailed_best and (best_candidate is None or detailed_best["score"] > best_candidate["score"]):
-        best_candidate = detailed_best
+    for variant_name, variant_image in orientation_variants[:2]:
+        if deadline is not None and time.monotonic() >= deadline:
+            break
+        rows, warnings = extract_barcode_rows_from_tokens(variant_image)
+        candidates.append(build_candidate(f"{variant_name}_token", rows, warnings, source="token_barcode"))
 
-    if not is_confident_candidate(best_candidate):
-        token_candidates: list[dict] = []
-        for _, variant in variants[:4]:
-            token_rows, _ = extract_rows_from_tokens(extract_tokens(variant), variant.shape[1])
-            token_candidates.extend(token_rows)
-
-        token_merged = build_candidate(
-            "token_merge",
-            list(best_candidate["rows"]) + token_candidates if best_candidate else token_candidates,
-            list(best_candidate["warnings"]) if best_candidate else ["OCR 결과가 없습니다."],
-            source="token_merge",
+    best_candidate = select_best_candidate(candidates)
+    if deadline is not None and time.monotonic() >= deadline:
+        warnings = list(best_candidate["warnings"]) if best_candidate else ["OCR 결과가 없습니다."]
+        warnings.append("OCR 시간 제한에 도달해 빠른 상품코드 추출 결과만 반환했습니다.")
+        final_rows = list(best_candidate["rows"]) if best_candidate else []
+        log_ocr_stage(
+            f"stage=best_ocr_result mode=timeboxed elapsedMs={round((time.monotonic() - overall_started_at) * 1000)} rows={len(final_rows)}"
         )
-        if best_candidate is None or token_merged["score"] > best_candidate["score"]:
-            best_candidate = token_merged
+        return final_rows, dedupe_warnings(warnings)
 
+    if best_candidate is None:
+        return [], ["OCR 결과가 없습니다."]
+
+    log_ocr_stage(
+        f"stage=best_ocr_result mode=hybrid_barcode elapsedMs={round((time.monotonic() - overall_started_at) * 1000)} rows={len(best_candidate['rows'])}"
+    )
     return finalize_candidate(best_candidate)
 
 

@@ -7,9 +7,30 @@ const execFileAsync = promisify(execFile);
 export async function findPythonCandidatesFromWhere() {
   const discovered = [];
 
-  for (const command of ['python', 'py']) {
+  if (process.platform === 'win32') {
+    for (const command of ['python', 'py']) {
+      try {
+        const { stdout } = await execFileAsync('where.exe', [command], {
+          cwd: process.cwd(),
+          timeout: 5000,
+        });
+        discovered.push(
+          ...String(stdout ?? '')
+            .split(/\r?\n/)
+            .map((line) => line.trim())
+            .filter(Boolean)
+            .filter((line) => !line.includes('WindowsApps')),
+        );
+      } catch {
+        // Ignore discovery failures and continue with static candidates.
+      }
+    }
+    return discovered;
+  }
+
+  for (const command of ['python3', 'python']) {
     try {
-      const { stdout } = await execFileAsync('where.exe', [command], {
+      const { stdout } = await execFileAsync('which', [command], {
         cwd: process.cwd(),
         timeout: 5000,
       });
@@ -17,8 +38,7 @@ export async function findPythonCandidatesFromWhere() {
         ...String(stdout ?? '')
           .split(/\r?\n/)
           .map((line) => line.trim())
-          .filter(Boolean)
-          .filter((line) => !line.includes('WindowsApps')),
+          .filter(Boolean),
       );
     } catch {
       // Ignore discovery failures and continue with static candidates.
