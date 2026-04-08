@@ -3,6 +3,7 @@ import iconv from 'iconv-lite';
 const BARCODE_BYTES = 13;
 const NAME_BYTES = 30;
 const SHORT_NAME_BYTES = 14;
+const REQUIRED_BYTES = BARCODE_BYTES + NAME_BYTES;
 const TOTAL_BYTES = BARCODE_BYTES + NAME_BYTES + SHORT_NAME_BYTES;
 
 export function parseMasterBuffer(buffer, fileName = 'upload.txt') {
@@ -26,7 +27,7 @@ export function parseMasterBuffer(buffer, fileName = 'upload.txt') {
     lineNumber += 1;
 
     if (lineBytes.length === 0) continue;
-    if (lineBytes.length === TOTAL_BYTES) fixedWidthRows += 1;
+    if (lineBytes.length === TOTAL_BYTES || lineBytes.length === REQUIRED_BYTES) fixedWidthRows += 1;
     else irregularRows += 1;
 
     const barcode = decodeAscii(lineBytes.slice(0, BARCODE_BYTES));

@@ -1039,16 +1039,18 @@ export default function KrsMasterApp() {
           {view === 'scanner' && <ScannerPanel videoRef={videoRef} scannerEnabled={scannerEnabled} onToggleScanner={toggleScannerEnabled} scanInput={scanInput} setScanInput={setScanInput} lastScanRaw={lastScanRaw} scanStatus={scanStatus} scanFeedback={scanFeedback} scanError={scanError} onClear={() => { clearScanFeedbackTimeout(); setScanInput(''); setLastScanRaw(''); setScanFeedback(scannerEnabled ? 'scanning' : 'idle'); }} />}
           {view === 'search' && <SearchPanel query={query} setQuery={setQuery} onSearch={runSearch} onClear={() => { setQuery(''); setSubmittedQuery(''); }} validationMessage={searchValidation.message} searchEnabled={searchValidation.canSearch} />}
           {view === 'import' && <ImportPanel inputRef={inputRef} uploading={uploading} uploadMessage={uploadMessage} onChoose={() => inputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await saveMasterFile(file); event.target.value = ''; }} />}
-          {view === 'bundle' && <BundlePanel bundleTab={bundleTab} setBundleTab={setBundleTab} onOpenReportStatus={() => void openBundleReportStatus()} bundleForm={bundleForm} setBundleForm={setBundleForm} bundleReportBusy={bundleReportBusy} bundleReportMessage={bundleReportMessage} onSave={saveBundleReport} onDownload={downloadBundleDb} bundleReportRows={bundleReportRows} bundleReportRowsBusy={bundleReportRowsBusy} bundleReportRowsMessage={bundleReportRowsMessage} editingReportId={editingReportId} editingReportForm={editingReportForm} setEditingReportForm={setEditingReportForm} onRefreshReportRows={() => void loadBundleReportRows()} onStartEdit={startEditBundleReport} onCancelEdit={cancelEditBundleReport} onSaveEdit={() => void saveEditedBundleReport()} onDelete={(id) => void removeBundleReport(id)} bundleMasterInputRef={bundleMasterInputRef} bundleMasterBusy={bundleMasterBusy} bundleMasterMessage={bundleMasterMessage} bundleMasterSummary={bundleMasterSummary} onPickBundleMaster={() => bundleMasterInputRef.current?.click()} onBundleMasterFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await uploadBundleMasterFile(file); event.target.value = ''; }} bundleLookupQuery={bundleLookupQuery} setBundleLookupQuery={setBundleLookupQuery} bundleLookupItems={bundleLookupItems} bundleLookupBusy={bundleLookupBusy} bundleLookupMessage={bundleLookupMessage} onLookup={() => void loadBundleLookup(bundleLookupQuery)} />}
+          {view === 'bundle' && <BundlePanel bundleTab={bundleTab} setBundleTab={setBundleTab} onOpenReportStatus={() => void openBundleReportStatus()} bundleForm={bundleForm} setBundleForm={setBundleForm} bundleReportBusy={bundleReportBusy} bundleReportMessage={bundleReportMessage} onSave={saveBundleReport} onDownload={downloadBundleDb} bundleReportRows={bundleReportRows} bundleReportRowsBusy={bundleReportRowsBusy} bundleReportRowsMessage={bundleReportRowsMessage} editingReportId={editingReportId} editingReportForm={editingReportForm} setEditingReportForm={setEditingReportForm} onRefreshReportRows={() => void loadBundleReportRows()} onStartEdit={startEditBundleReport} onCancelEdit={cancelEditBundleReport} onSaveEdit={() => void saveEditedBundleReport()} onDelete={(id) => void removeBundleReport(id)} bundleLookupQuery={bundleLookupQuery} setBundleLookupQuery={setBundleLookupQuery} bundleLookupItems={bundleLookupItems} bundleLookupBusy={bundleLookupBusy} bundleLookupMessage={bundleLookupMessage} onLookup={() => void loadBundleLookup(bundleLookupQuery)} />}
           {view === 'convert' && <ConvertPanel inputRef={convertInputRef} busy={convertBusy} message={convertMessage} summary={convertSummary} items={filteredConvertedItems} totalItems={convertedItems.length} warnings={convertWarnings} query={convertQuery} setQuery={setConvertQuery} onChoose={() => convertInputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertFileToBarcodeList(file); event.target.value = ''; }} convertSaveName={convertSaveName} setConvertSaveName={setConvertSaveName} convertSavedMeta={convertSavedMeta} fileSavedConvertSets={fileSavedConvertSets} savedConvertBusy={savedConvertBusy} savedConvertSelection={savedConvertSelection.file} savedConvertMessage={savedConvertMessage} onSaveCurrentConvert={() => void saveCurrentConvertResult('file')} onLoadSavedConvert={(id) => void loadSavedConvertResult('file', id)} onDeleteSavedConvert={() => void removeSavedConvertResult('file')} photoInputRef={photoInputRef} photoGalleryInputRef={photoGalleryInputRef} photoBusy={photoBusy} photoMessage={photoMessage} photoSummary={photoSummary} photoRows={photoRows} photoWarnings={photoWarnings} photoServerSaveName={photoServerSaveName} setPhotoServerSaveName={setPhotoServerSaveName} photoSavedMeta={photoSavedMeta} photoSavedConvertSets={photoSavedConvertSets} photoSavedConvertSelection={savedConvertSelection.photo} onChoosePhoto={() => photoInputRef.current?.click()} onChoosePhotoFromLibrary={() => photoGalleryInputRef.current?.click()} onPhotoFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertInventoryPhoto(file); event.target.value = ''; }} onChangePhotoRow={updatePhotoRow} onDownloadPhotoRows={downloadPhotoRowsAsExcel} onSavePhotoRows={savePhotoRowsToDevice} onSavePhotoRowsToServer={() => void saveCurrentConvertResult('photo')} onLoadSavedPhotoConvert={(id) => void loadSavedConvertResult('photo', id)} onDeleteSavedPhotoConvert={() => void removeSavedConvertResult('photo')} onClearPhotoRows={clearSavedPhotoRows} photoSaveBusy={photoSaveBusy} photoProgress={photoProgress} photoPreviewUrl={photoPreviewUrl} photoPreviewName={photoPreviewName} photoPreviewMeta={photoPreviewMeta} masterRecordByBarcode={masterRecordByBarcode} />}
           {(view === 'scanner' || view === 'search') && <MatchSection exactMatch={exactMatch} similarMatches={similarMatches} emptyMessage={searchEmptyMessage} />}
         </div>
-        <aside className="space-y-6">
+        {view === 'import' && <aside className="space-y-6">
           <Panel title="현재 마스터" icon={<InventoryIcon className="h-5 w-5" />}>
             {summary ? <><MetricRow label="파일명" value={summary.fileName} /><MetricRow label="레코드" value={`${summary.recordCount.toLocaleString()}건`} /><MetricRow label="예외 행" value={`${summary.irregularRows.toLocaleString()}건`} /><MetricRow label="업로드 시각" value={formatDate(summary.importedAt)} /><div className="mt-4 flex flex-wrap gap-3"><button onClick={() => setView('import')} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white">마스터 업로드</button><button onClick={clearLocalMaster} className="rounded-2xl bg-[#edf4fb] px-5 py-3 font-semibold text-[#002542]">로컬 저장 삭제</button></div></> : <p className="text-sm text-[#5b6670]">업로드된 마스터가 없습니다.</p>}
           </Panel>
           <Panel title="번들 마스터" icon={<BundleIcon className="h-5 w-5" />}>
-            {bundleMasterSummary ? <><MetricRow label="파일명" value={bundleMasterSummary.fileName} /><MetricRow label="레코드" value={`${bundleMasterSummary.recordCount.toLocaleString()}건`} /><MetricRow label="업로드 시각" value={formatDate(bundleMasterSummary.importedAt)} /></> : <p className="text-sm text-[#5b6670]">번들 마스터가 아직 없습니다.</p>}
+            <input ref={bundleMasterInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={async (event) => { const file = event.target.files?.[0]; if (!file) return; await uploadBundleMasterFile(file); event.target.value = ''; }} />
+            {bundleMasterSummary ? <><MetricRow label="파일명" value={bundleMasterSummary.fileName} /><MetricRow label="레코드" value={`${bundleMasterSummary.recordCount.toLocaleString()}건`} /><MetricRow label="업로드 시각" value={formatDate(bundleMasterSummary.importedAt)} /><div className="mt-4"><button onClick={() => bundleMasterInputRef.current?.click()} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white">번들 마스터 업로드</button></div></> : <><p className="text-sm text-[#5b6670]">번들 마스터가 아직 없습니다.</p><div className="mt-4"><button onClick={() => bundleMasterInputRef.current?.click()} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white">번들 마스터 업로드</button></div></>}
+            {bundleMasterMessage && <p className="mt-4 whitespace-pre-line text-sm text-[#5b6670]">{bundleMasterMessage}</p>}
           </Panel>
           <Panel title="변환 현황" icon={<DescriptionIcon className="h-5 w-5" />}>
             {convertSummary ? <><MetricRow label="파일명" value={convertSummary.fileName} />{convertSummary.savedName ? <MetricRow label="저장 이름" value={convertSummary.savedName} /> : null}<MetricRow label="변환 건수" value={`${convertSummary.recordCount.toLocaleString()}건`} /><MetricRow label="제외 행" value={`${convertSummary.skippedRows.toLocaleString()}건`} /><MetricRow label="변환 시각" value={formatDate(convertSummary.importedAt)} /></> : <p className="text-sm text-[#5b6670]">아직 변환한 파일이 없습니다.</p>}
@@ -1056,7 +1058,7 @@ export default function KrsMasterApp() {
           <Panel title="최근 업로드" icon={<HistoryIcon className="h-5 w-5" />}>
             {history.length === 0 ? <p className="text-sm text-[#5b6670]">업로드 기록이 없습니다.</p> : history.map((item) => <div key={item.id}><ImportHistory item={item} /></div>)}
           </Panel>
-        </aside>
+        </aside>}
       </main>
       <nav className="fixed bottom-0 left-0 z-50 flex h-20 w-full items-center justify-around border-t border-[#dfe3e7] bg-white/95 px-4 shadow-[0_-4px_20px_rgba(0,37,66,0.06)] md:hidden">
         {navItems.map((item) => <button key={item.id} onClick={() => setView(item.id)}><NavItem icon={item.icon} label={item.label} active={view === item.id} /></button>)}
@@ -1361,12 +1363,6 @@ function BundlePanel(props: {
   onCancelEdit: () => void;
   onSaveEdit: () => void;
   onDelete: (id: number) => void;
-  bundleMasterInputRef: React.RefObject<HTMLInputElement | null>;
-  bundleMasterBusy: boolean;
-  bundleMasterMessage: string | null;
-  bundleMasterSummary: BundleMasterSummary | null;
-  onPickBundleMaster: () => void;
-  onBundleMasterFile: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
   bundleLookupQuery: string;
   setBundleLookupQuery: React.Dispatch<React.SetStateAction<string>>;
   bundleLookupItems: BundleMasterRecord[];
@@ -1470,19 +1466,6 @@ function BundlePanel(props: {
 
       {props.bundleTab === 'lookup' && (
         <section className="space-y-6">
-          <Panel title="번들 마스터 업로드" icon={<UploadIcon className="h-5 w-5" />}>
-            <input ref={props.bundleMasterInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={props.onBundleMasterFile} />
-            <div className="flex flex-col gap-4 rounded-[2rem] border border-[#dce6f0] bg-[#f8fbfd] p-6 md:flex-row md:items-center md:justify-between">
-              <div>
-                <p className="text-lg font-bold text-[#171c1f]">번들 마스터 엑셀 업로드</p>
-                <p className="mt-2 text-sm text-[#5b6670]">업로드 시 기존 번들 마스터 DB는 새 파일 기준으로 교체됩니다.</p>
-              </div>
-              <button onClick={props.onPickBundleMaster} disabled={props.bundleMasterBusy} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white disabled:opacity-60">엑셀 선택</button>
-            </div>
-            {props.bundleMasterSummary && <div className="mt-4 rounded-[1.5rem] bg-[#edf4fb] p-4 text-sm text-[#002542]">{props.bundleMasterSummary.fileName} / {props.bundleMasterSummary.recordCount.toLocaleString()}건</div>}
-            {props.bundleMasterMessage && <p className="mt-4 whitespace-pre-line text-sm text-[#5b6670]">{props.bundleMasterMessage}</p>}
-          </Panel>
-
           <Panel title="번들 검색" icon={<SearchIcon className="h-5 w-5" />}>
             <div className="flex flex-col gap-3 md:flex-row">
               <input value={props.bundleLookupQuery} onChange={(event) => props.setBundleLookupQuery(event.target.value)} placeholder="상품명 또는 바코드 검색" className="flex-1 rounded-2xl border border-[#d6e0ea] bg-white px-5 py-4 outline-none" />

@@ -7,7 +7,8 @@ KRS Master currently includes:
 - browser IndexedDB cache restore on startup
 - scanner / search / bundle / convert / upload navigation
 - bundle report save, edit, delete, and Excel export
-- bundle master upload and lookup
+- bundle master lookup
+- bundle master upload from the upload menu
 - Excel/CSV barcode conversion
 - photo/PDF OCR conversion flow
 - installable PWA shell with update banner and local draft restore
@@ -19,6 +20,7 @@ KRS Master currently includes:
 - app restores local IndexedDB data first, then syncs newer server master automatically
 - local cache is still used for fast startup and offline-tolerant behavior
 - upload filename is now normalized server-side to reduce Korean filename mojibake
+- rows without `shortName` are now treated as valid rows, not irregular rows
 
 ### 2. Search / Match Result
 - barcode search supports exact match and similar match ranking
@@ -26,7 +28,12 @@ KRS Master currently includes:
 - records with empty `shortName` are now treated as bundle-style products for display only
 - bundle-style match cards now show an orange card background and a `번들` badge
 
-### 3. Scanner
+### 3. Upload Menu Layout
+- `현재 마스터`, `번들 마스터`, `변환 현황`, and `최근 업로드` cards are shown only in the `업로드` menu
+- bundle master upload was moved out of `번들 > 번들 검색`
+- bundle master upload is now triggered from the `업로드` menu's `번들 마스터` card
+
+### 4. Scanner
 - scanner button labels are `카메라 활성화`, `카메라 끄기`, `재스캔`
 - while the camera is actively reading, the preview shows `스캔중`
 - after a successful read, the preview briefly shows `스캔성공`
@@ -34,7 +41,7 @@ KRS Master currently includes:
 - camera startup prefers rear camera, high resolution, and continuous focus hints
 - once enabled, scanner auto-reactivation is attempted on the next visit
 
-### 4. Convert Menu
+### 5. Convert Menu
 - convert tab accepts `.xlsx`, `.xls`, `.csv`
 - expected headers are `상품코드`, `상품명`
 - converted output renders barcode cards with preview
@@ -42,14 +49,14 @@ KRS Master currently includes:
 - converted results can now be saved to server SQLite with an operator-defined name
 - saved convert results can be listed, reloaded, and deleted on later visits
 
-### 5. Photo OCR Convert
+### 6. Photo OCR Convert
 - photo OCR accepts mobile camera captures, gallery images, and scanned PDFs
 - OCR rows remain editable in the browser
 - OCR rows can still be temporarily saved per device in IndexedDB
 - OCR rows can now also be stored in server SQLite as named saved sets
 - server upload filename normalization also applies to OCR image/PDF filenames
 
-### 6. Bundle Menu
+### 7. Bundle Menu
 Bundle menu tabs are currently:
 
 - `번들 제보`
@@ -61,27 +68,29 @@ Implemented behavior:
 - bundle report save to SQLite
 - bundle report DB Excel download
 - bundle report status list / edit / delete
-- bundle master Excel upload
 - bundle master search by product name or barcode
 
 ## Main Backend Additions In This Phase
 - filename normalization helper for multipart uploads
-- new convert saved-set tables:
+- convert saved-set tables:
   - `convert_saved_sets`
   - `convert_saved_rows`
-- new APIs:
+- convert saved-set APIs:
   - `GET /api/convert/saved`
   - `GET /api/convert/saved/:id`
   - `POST /api/convert/saved`
   - `DELETE /api/convert/saved/:id`
 - duplicate convert save names now return HTTP `409`
+- master parser now counts `barcode + name` rows as valid even when `shortName` is missing
 
 ## Main Files Updated In This Phase
 - `src/KrsMasterApp.tsx`
 - `src/lib/api.ts`
 - `src/lib/converter.ts`
+- `src/lib/master.ts`
 - `server/index.js`
 - `server/db.js`
+- `server/masterParser.js`
 
 ## Local Verification
 Confirmed locally:
@@ -90,6 +99,7 @@ Confirmed locally:
 - `npm run build`
 - `node --check server/index.js`
 - `node --check server/db.js`
+- `node --check server/masterParser.js`
 
 ## Current Data / Runtime Notes
 - SQLite DB path: `data/krsmaster.sqlite`
@@ -101,11 +111,13 @@ Confirmed locally:
 ## Recommended Next Checks
 1. verify actual Korean filename uploads from Windows/iPhone browsers across all upload panels
 2. verify saved convert result load/delete behavior with real operator data volumes
-3. verify photo OCR named saves do not confuse users versus local temporary save
-4. verify scanner focus/read speed on actual Galaxy S25 hardware
-5. verify iPhone Safari/Chrome behavior under valid HTTPS
-6. verify PWA install flow and update banner behavior after a new deploy
-7. continue cleaning remaining mojibake strings in source and docs when convenient
+3. verify the upload menu layout is clearer for operators after moving bundle master upload
+4. verify rows without short names no longer inflate `예외 행`
+5. verify photo OCR named saves do not confuse users versus local temporary save
+6. verify scanner focus/read speed on actual Galaxy S25 hardware
+7. verify iPhone Safari/Chrome behavior under valid HTTPS
+8. verify PWA install flow and update banner behavior after a new deploy
+9. continue cleaning remaining mojibake strings in source and docs when convenient
 
 ## Useful Commands
 

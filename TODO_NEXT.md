@@ -91,7 +91,20 @@ Actions:
 Expected result:
 - operators can reliably reuse saved convert results across visits and devices
 
-### 5. Clean mojibake in source and docs
+### 5. Validate upload-menu information architecture
+Reason:
+- status cards and bundle master upload were moved into the upload menu
+- operator discoverability needs a real usage check
+
+Actions:
+- confirm users find bundle master upload from `업로드` without guidance
+- verify the removed upload area from `번들 검색` does not create confusion
+- verify current master / bundle master / convert status cards are still visible where operators expect them
+
+Expected result:
+- upload-related actions are easier to discover and less duplicated
+
+### 6. Clean mojibake in source and docs
 Reason:
 - several strings in code and markdown still show encoding damage
 - this creates maintenance and QA risk
@@ -105,7 +118,7 @@ Expected result:
 - source and docs are readable
 - labels are stable and maintainable
 
-### 6. Improve upload error reporting
+### 7. Improve upload error reporting
 Reason:
 - current failures can still look similar to end users
 - easier debugging is needed for operations
@@ -120,7 +133,7 @@ Expected result:
 
 ## Medium Priority
 
-### 7. Validate convert-tab real files
+### 8. Validate convert-tab real files
 Reason:
 - convert tab assumes headers `상품코드`, `상품명`
 - Excel source files may still contain numeric cells, spaces, or leading-zero edge cases
@@ -133,7 +146,7 @@ Actions:
 Expected result:
 - conversion works reliably with real operator files
 
-### 8. Expand parser for real-world file variants
+### 9. Expand parser for real-world file variants
 Reason:
 - field assumptions may differ by actual source files
 - `.dat`, `.mst`, `.csv` are selectable but parser is still fixed-width oriented first
@@ -147,7 +160,7 @@ Actions:
 Expected result:
 - import succeeds for actual production file variants
 
-### 9. Decide whether tap-to-focus or torch UI is needed
+### 10. Decide whether tap-to-focus or torch UI is needed
 Reason:
 - some Android devices may still need extra camera assistance beyond current constraints
 
@@ -159,7 +172,7 @@ Actions:
 Expected result:
 - more reliable scanning on difficult mobile hardware
 
-### 10. Harden PWA update UX
+### 11. Harden PWA update UX
 Reason:
 - service worker caching is now enabled
 - update and cache invalidation behavior should be verified in production
@@ -184,13 +197,15 @@ Before next release:
 5. deploy `dist/`
 6. verify HTTPS
 7. test upload with real production master file
-8. test search and bundle-card highlighting
-9. test barcode rendering
-10. test scanner on Android Chrome
-11. test scanner on iPhone Safari/Chrome
-12. test scanner on Galaxy S25
-13. test saved convert result flow on at least two devices
-14. test installed PWA launch and update flow
+8. test upload menu layout and bundle master upload discoverability
+9. test search and bundle-card highlighting
+10. test shortName-empty rows do not increase `예외 행`
+11. test barcode rendering
+12. test scanner on Android Chrome
+13. test scanner on iPhone Safari/Chrome
+14. test scanner on Galaxy S25
+15. test saved convert result flow on at least two devices
+16. test installed PWA launch and update flow
 
 ## Notes For Next Person
 - shared master sync already exists with Express + SQLite

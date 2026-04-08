@@ -25,6 +25,7 @@ export type BarcodeMatch = {
 const BARCODE_BYTES = 13;
 const NAME_BYTES = 30;
 const SHORT_NAME_BYTES = 14;
+const REQUIRED_BYTES = BARCODE_BYTES + NAME_BYTES;
 const TOTAL_BYTES = BARCODE_BYTES + NAME_BYTES + SHORT_NAME_BYTES;
 const CHOSEONG = ['ㄱ', 'ㄲ', 'ㄴ', 'ㄷ', 'ㄸ', 'ㄹ', 'ㅁ', 'ㅂ', 'ㅃ', 'ㅅ', 'ㅆ', 'ㅇ', 'ㅈ', 'ㅉ', 'ㅊ', 'ㅋ', 'ㅌ', 'ㅍ', 'ㅎ'];
 
@@ -48,7 +49,7 @@ export async function parseMasterFile(file: File): Promise<{ records: MasterReco
     lineNumber += 1;
 
     if (lineBytes.length === 0) continue;
-    if (lineBytes.length === TOTAL_BYTES) fixedWidthRows += 1;
+    if (lineBytes.length === TOTAL_BYTES || lineBytes.length === REQUIRED_BYTES) fixedWidthRows += 1;
     else irregularRows += 1;
 
     const barcode = decodeAscii(lineBytes.slice(0, BARCODE_BYTES));

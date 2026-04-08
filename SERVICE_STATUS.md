@@ -18,8 +18,9 @@ It also supports PWA installation with standalone launch behavior, bundle workfl
 10. User can convert Excel/CSV input into barcode result cards.
 11. User can convert photo/PDF inventory sheets through OCR.
 12. User can temporarily save OCR rows on-device or save convert/OCR results to server DB with a custom name.
-13. Installed users can relaunch the app from the home screen.
-14. If a new deployed version is ready, the app shows an update banner before refresh.
+13. Upload-related status cards are shown in the `업로드` menu, and bundle master upload is triggered there.
+14. Installed users can relaunch the app from the home screen.
+15. If a new deployed version is ready, the app shows an update banner before refresh.
 
 ## Current Data Model
 Master file is treated as a fixed-width text file.
@@ -31,6 +32,7 @@ Master file is treated as a fixed-width text file.
 - Encoding assumption: CP949 / EUC-KR family
 
 The parser currently tolerates irregular-width rows and counts them as exceptions.
+Rows that stop after `barcode + name` are now also treated as valid rows, so missing `shortName` does not increase `irregularRows`.
 
 ## Current Architecture
 
@@ -50,6 +52,8 @@ Main files:
 - search flow
 - scanner flow
 - convert and OCR result rendering
+- upload-menu-only status card layout
+- bundle master upload entry point in the upload menu
 - local restore and server sync coordination
 - scanner preference persistence
 - local draft persistence for in-progress form/input values
@@ -66,6 +70,7 @@ Main files:
 - master file parsing
 - similar barcode matching logic
 - similarity scoring
+- shortName-missing rows are treated as valid rows for summary counting
 
 ### `src/lib/persistence.ts`
 - IndexedDB open/load/save/delete helpers
@@ -128,6 +133,11 @@ After reload:
 - app checks for a newer active server master
 - newer server data replaces stale local cache
 - saved convert result sets remain available from the server across devices
+
+## Current Upload Menu Layout
+- `현재 마스터`, `번들 마스터`, `변환 현황`, and `최근 업로드` cards are shown only in the `업로드` menu
+- bundle master upload is initiated from the `번들 마스터` card in the upload menu
+- `번들 > 번들 검색` now focuses on lookup only
 
 ## Current Scanner Behavior
 Two scanner paths exist:
@@ -208,7 +218,8 @@ Production artifact:
 - automatic scanner reactivation attempt on revisit
 - broader upload file chooser extensions: `.txt`, `.dat`, `.mst`, `.csv`
 - bundle report save / edit / delete
-- bundle master upload / lookup
+- bundle master lookup
+- upload-menu bundle master upload
 - installable PWA manifest and service worker
 - update-ready banner
 - local draft restore after refresh
