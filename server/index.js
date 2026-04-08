@@ -10,12 +10,16 @@ import { promisify } from 'util';
 import * as XLSX from 'xlsx';
 import {
   createBundleReport,
+  createConvertSavedSet,
   deleteBundleReport,
+  deleteConvertSavedSet,
   getActiveMasterRecords,
   getActiveMasterSummary,
   getBundleMasterSummary,
+  getConvertSavedSetDetail,
   initializeDb,
   listBundleReports,
+  listConvertSavedSets,
   replaceActiveMaster,
   replaceBundleMaster,
   searchActiveRecords,
@@ -64,7 +68,8 @@ app.post('/api/master/import', upload.single('masterFile'), async (req, res, nex
       return;
     }
 
-    const parsed = parseMasterBuffer(req.file.buffer, req.file.originalname);
+    const normalizedFileName = normalizeUploadFileName(req.file.originalname);
+    const parsed = parseMasterBuffer(req.file.buffer, normalizedFileName);
     const saved = await replaceActiveMaster(parsed);
     res.json({ ok: true, summary: saved.summary });
   } catch (error) {
@@ -203,9 +208,10 @@ app.post('/api/bundles/master/import', upload.single('bundleFile'), async (req, 
       return;
     }
 
+    const normalizedFileName = normalizeUploadFileName(req.file.originalname);
     const parsed = parseBundleExcel(req.file.buffer);
     const saved = await replaceBundleMaster({
-      fileName: req.file.originalname,
+      fileName: normalizedFileName,
       records: parsed.records,
     });
     res.json({ ok: true, summary: saved.summary, warnings: parsed.warnings });
@@ -221,14 +227,15 @@ app.post('/api/convert/inventory-photo', upload.single('photoFile'), async (req,
       return;
     }
 
-    const result = await runInventoryPhotoOcr(req.file.buffer, req.file.originalname);
+    const normalizedFileName = normalizeUploadFileName(req.file.originalname);
+    const result = await runInventoryPhotoOcr(req.file.buffer, normalizedFileName);
     if (result.engine?.path) {
-      console.info(`[OCR] engine=${result.engine.name ?? 'unknown'} path=${result.engine.path} file=${req.file.originalname}`);
+      console.info(`[OCR] engine=${result.engine.name ?? 'unknown'} path=${result.engine.path} file=${normalizedFileName}`);
     }
     res.json({
       ok: true,
       summary: {
-        fileName: req.file.originalname,
+        fileName: normalizedFileName,
         importedAt: new Date().toISOString(),
         recordCount: result.items.length,
       },
@@ -252,6 +259,64 @@ app.get('/api/bundles/master/search', async (req, res, next) => {
   }
 });
 
+app.get('/api/convert/saved', async (_req, res, next) => {
+  try {
+    const items = await listConvertSavedSets();
+    res.json({ items });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.get('/api/convert/saved/:id', async (req, res, next) => {
+  try {
+    const id = Number.parseInt(String(req.params.id ?? ''), 10);
+    if (!Number.isInteger(id) || id < 1) {
+      throw new Error('VALIDATION: 올바른 저장 번호를 입력해 주세요.');
+    }
+
+    const item = await getConvertSavedSetDetail(id);
+    if (!item) {
+      res.status(404).json({ error: '저장된 변환 결과를 찾지 못했습니다.' });
+      return;
+    }
+
+    res.json({ item });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.post('/api/convert/saved', async (req, res, next) => {
+  try {
+    const payload = normalizeConvertSavedPayload(req.body ?? {});
+    validateConvertSavedPayload(payload);
+    const item = await createConvertSavedSet(payload);
+    res.status(201).json({ ok: true, item });
+  } catch (error) {
+    next(error);
+  }
+});
+
+app.delete('/api/convert/saved/:id', async (req, res, next) => {
+  try {
+    const id = Number.parseInt(String(req.params.id ?? ''), 10);
+    if (!Number.isInteger(id) || id < 1) {
+      throw new Error('VALIDATION: 올바른 저장 번호를 입력해 주세요.');
+    }
+
+    const result = await deleteConvertSavedSet(id);
+    if (!result.changes) {
+      res.status(404).json({ error: '삭제할 저장 결과를 찾지 못했습니다.' });
+      return;
+    }
+
+    res.json({ ok: true });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.use((error, _req, res, _next) => {
   console.error(error);
 
@@ -265,6 +330,13 @@ app.use((error, _req, res, _next) => {
   if (error instanceof Error && error.message.startsWith('VALIDATION:')) {
     res.status(400).json({
       error: error.message.replace('VALIDATION:', '').trim(),
+    });
+    return;
+  }
+
+  if (isSqliteUniqueError(error)) {
+    res.status(409).json({
+      error: '같은 저장 이름이 이미 있습니다.',
     });
     return;
   }
@@ -304,6 +376,43 @@ function validateBundleReportPayload(payload) {
   }
   if (!/^\d{1,13}$/.test(payload.itemBarcode)) throw new Error('VALIDATION: 낱개 바코드는 1~13자리 숫자여야 합니다.');
   if (!payload.itemName) throw new Error('VALIDATION: 낱개 상품명을 입력해 주세요.');
+}
+
+function normalizeConvertSavedPayload(body) {
+  const rows = Array.isArray(body.rows)
+    ? body.rows.map((row, index) => ({
+      barcode: String(row?.barcode ?? '').trim(),
+      name: String(row?.name ?? '').trim(),
+      rowNumber: Number.isInteger(row?.rowNumber) ? row.rowNumber : index + 1,
+    }))
+    : [];
+
+  return {
+    name: String(body.name ?? '').trim(),
+    sourceType: String(body.sourceType ?? '').trim(),
+    sourceFileName: String(body.sourceFileName ?? '').trim(),
+    rows,
+  };
+}
+
+function validateConvertSavedPayload(payload) {
+  if (!payload.name) throw new Error('VALIDATION: 저장 이름을 입력해 주세요.');
+  if (payload.sourceType !== 'file' && payload.sourceType !== 'photo') {
+    throw new Error('VALIDATION: 저장 종류가 올바르지 않습니다.');
+  }
+  if (!payload.sourceFileName) throw new Error('VALIDATION: 원본 파일명이 필요합니다.');
+  if (!Array.isArray(payload.rows) || payload.rows.length === 0) {
+    throw new Error('VALIDATION: 저장할 변환 결과가 없습니다.');
+  }
+
+  for (const row of payload.rows) {
+    if (!row.barcode || !row.name) {
+      throw new Error('VALIDATION: 바코드와 상품명이 모두 있는 결과만 저장할 수 있습니다.');
+    }
+    if (!Number.isInteger(row.rowNumber) || row.rowNumber < 1) {
+      throw new Error('VALIDATION: 행 번호가 올바르지 않습니다.');
+    }
+  }
 }
 
 function parseBundleExcel(buffer) {
@@ -478,6 +587,47 @@ async function runInventoryPhotoOcr(buffer, originalName) {
 
 function sanitizeFileName(value) {
   return String(value ?? 'inventory_photo.jpg').replace(/[<>:"/\\|?*\x00-\x1F]/g, '_');
+}
+
+function normalizeUploadFileName(fileName) {
+  const original = String(fileName ?? '').trim();
+  if (!original) return 'upload';
+
+  try {
+    const recovered = Buffer.from(original, 'latin1').toString('utf8').trim();
+    if (looksBetterAsUtf8(original, recovered)) {
+      return recovered;
+    }
+  } catch {
+    // Ignore decode issues and keep the original filename.
+  }
+
+  return original;
+}
+
+function looksBetterAsUtf8(original, recovered) {
+  if (!recovered || recovered === original) return false;
+  return scoreReadableFileName(recovered) > scoreReadableFileName(original);
+}
+
+function scoreReadableFileName(value) {
+  let score = 0;
+  if (/[\uac00-\ud7a3]/.test(value)) score += 4;
+  if (!/[ÃÂÐÑØÞãåæçèéêëìíîïðñòóôõö÷øùúûüýþÿ]/.test(value)) score += 2;
+  if (!/[\uFFFD]/.test(value)) score += 1;
+  return score;
+}
+
+function isSqliteUniqueError(error) {
+  return Boolean(
+    error
+    && typeof error === 'object'
+    && 'code' in error
+    && error.code === 'SQLITE_CONSTRAINT'
+    && 'message' in error
+    && typeof error.message === 'string'
+    && error.message.includes('UNIQUE'),
+  );
 }
 
 function parsePythonJsonOutput(stdout) {

@@ -49,6 +49,7 @@ export type InventoryPhotoSummary = {
   fileName: string;
   importedAt: string;
   recordCount: number;
+  savedName?: string;
 };
 
 export type InventoryPhotoParseResponse = {
@@ -56,6 +57,35 @@ export type InventoryPhotoParseResponse = {
   summary: InventoryPhotoSummary;
   items: InventoryPhotoRow[];
   warnings: string[];
+};
+
+export type ConvertSaveSourceType = 'file' | 'photo';
+
+export type SavedConvertRow = {
+  barcode: string;
+  name: string;
+  rowNumber: number;
+};
+
+export type SavedConvertSetSummary = {
+  id: number;
+  name: string;
+  sourceType: ConvertSaveSourceType;
+  sourceFileName: string;
+  recordCount: number;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type SavedConvertSetDetail = SavedConvertSetSummary & {
+  rows: SavedConvertRow[];
+};
+
+export type SaveConvertPayload = {
+  name: string;
+  sourceType: ConvertSaveSourceType;
+  sourceFileName: string;
+  rows: SavedConvertRow[];
 };
 
 type ActiveMasterPayload = {
@@ -70,6 +100,14 @@ type BundleMasterSearchPayload = {
 
 type BundleReportListPayload = {
   items: BundleReportRow[];
+};
+
+type SavedConvertListPayload = {
+  items: SavedConvertSetSummary[];
+};
+
+type SavedConvertDetailPayload = {
+  item: SavedConvertSetDetail;
 };
 
 export async function fetchServerMaster() {
@@ -100,7 +138,7 @@ export async function uploadMasterToServer(file: File) {
     throw new Error(payload?.error ?? `Upload failed: ${response.status}`);
   }
 
-  return response.json();
+  return response.json() as Promise<{ ok: true; summary: MasterFileSummary }>;
 }
 
 export async function createBundleReport(payload: BundleReportInput) {
@@ -223,6 +261,54 @@ export async function uploadInventoryPhoto(file: File) {
   }
 
   return (await response.json()) as InventoryPhotoParseResponse;
+}
+
+export async function listSavedConvertSets() {
+  const response = await fetch('/api/convert/saved');
+  if (!response.ok) {
+    const error = await safeJson(response);
+    throw new Error(error?.error ?? '저장된 변환 결과 목록을 불러오지 못했습니다.');
+  }
+
+  return (await response.json()) as SavedConvertListPayload;
+}
+
+export async function fetchSavedConvertSet(id: number) {
+  const response = await fetch(`/api/convert/saved/${id}`);
+  if (!response.ok) {
+    const error = await safeJson(response);
+    throw new Error(error?.error ?? '저장된 변환 결과를 불러오지 못했습니다.');
+  }
+
+  return (await response.json()) as SavedConvertDetailPayload;
+}
+
+export async function saveConvertSet(payload: SaveConvertPayload) {
+  const response = await fetch('/api/convert/saved', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok) {
+    const error = await safeJson(response);
+    throw new Error(error?.error ?? '변환 결과 저장에 실패했습니다.');
+  }
+
+  return (await response.json()) as SavedConvertDetailPayload & { ok: true };
+}
+
+export async function deleteSavedConvertSet(id: number) {
+  const response = await fetch(`/api/convert/saved/${id}`, {
+    method: 'DELETE',
+  });
+
+  if (!response.ok) {
+    const error = await safeJson(response);
+    throw new Error(error?.error ?? '저장된 변환 결과 삭제에 실패했습니다.');
+  }
+
+  return response.json() as Promise<{ ok: true }>;
 }
 
 async function safeJson(response: Response) {

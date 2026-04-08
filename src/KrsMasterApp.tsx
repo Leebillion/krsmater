@@ -4,10 +4,14 @@ import { BarcodePreview } from './components/BarcodePreview';
 import { BundleIcon, CheckCircleIcon, DescriptionIcon, HistoryIcon, InfoIcon, InventoryIcon, ScannerIcon, SearchIcon, UploadIcon } from './components/Icons';
 import {
   createBundleReport,
+  deleteSavedConvertSet,
   deleteBundleReport,
+  fetchSavedConvertSet,
   downloadBundleReportDb,
   fetchBundleMasterStatus,
   fetchServerMaster,
+  listSavedConvertSets,
+  saveConvertSet,
   listBundleReports,
   searchBundleMaster,
   uploadInventoryPhoto,
@@ -16,8 +20,11 @@ import {
   type BundleMasterSummary,
   type BundleReportInput,
   type BundleReportRow,
+  type ConvertSaveSourceType,
   type InventoryPhotoRow,
   type InventoryPhotoSummary,
+  type SavedConvertRow,
+  type SavedConvertSetSummary,
   uploadBundleMaster,
   uploadMasterToServer,
 } from './lib/api';
@@ -56,6 +63,14 @@ type AppDraftState = {
   bundleForm: BundleReportInput;
   editingReportId: number | null;
   editingReportForm: BundleReportInput;
+};
+type SavedConvertSelection = {
+  file: number | '';
+  photo: number | '';
+};
+type SavedConvertMeta = {
+  savedName: string;
+  updatedAt: string;
 };
 
 declare global {
@@ -129,16 +144,24 @@ export default function KrsMasterApp() {
   const [convertMessage, setConvertMessage] = useState<string | null>('엑셀 또는 CSV 파일을 올리면 바코드 리스트로 변환합니다.');
   const [convertWarnings, setConvertWarnings] = useState<string[]>([]);
   const [convertQuery, setConvertQuery] = useState('');
+  const [convertSaveName, setConvertSaveName] = useState('');
+  const [convertSavedMeta, setConvertSavedMeta] = useState<SavedConvertMeta | null>(null);
   const [photoSummary, setPhotoSummary] = useState<InventoryPhotoSummary | null>(null);
   const [photoRows, setPhotoRows] = useState<InventoryPhotoRow[]>([]);
   const [photoBusy, setPhotoBusy] = useState(false);
   const [photoMessage, setPhotoMessage] = useState<string | null>('재고현황 표 사진을 올리면 상품코드와 상품명을 추출합니다.');
   const [photoWarnings, setPhotoWarnings] = useState<string[]>([]);
   const [photoSaveBusy, setPhotoSaveBusy] = useState(false);
+  const [photoServerSaveName, setPhotoServerSaveName] = useState('');
+  const [photoSavedMeta, setPhotoSavedMeta] = useState<SavedConvertMeta | null>(null);
   const [photoProgress, setPhotoProgress] = useState(0);
   const [photoPreviewUrl, setPhotoPreviewUrl] = useState<string | null>(null);
   const [photoPreviewName, setPhotoPreviewName] = useState<string | null>(null);
   const [photoPreviewMeta, setPhotoPreviewMeta] = useState<string | null>(null);
+  const [savedConvertSets, setSavedConvertSets] = useState<SavedConvertSetSummary[]>([]);
+  const [savedConvertBusy, setSavedConvertBusy] = useState(false);
+  const [savedConvertMessage, setSavedConvertMessage] = useState<string | null>(null);
+  const [savedConvertSelection, setSavedConvertSelection] = useState<SavedConvertSelection>({ file: '', photo: '' });
   const [bundleReportRows, setBundleReportRows] = useState<BundleReportRow[]>([]);
   const [bundleReportRowsBusy, setBundleReportRowsBusy] = useState(false);
   const [bundleReportRowsMessage, setBundleReportRowsMessage] = useState<string | null>(null);
@@ -172,6 +195,14 @@ export default function KrsMasterApp() {
     }
     return map;
   }, [records]);
+  const fileSavedConvertSets = useMemo(
+    () => savedConvertSets.filter((item) => item.sourceType === 'file'),
+    [savedConvertSets],
+  );
+  const photoSavedConvertSets = useMemo(
+    () => savedConvertSets.filter((item) => item.sourceType === 'photo'),
+    [savedConvertSets],
+  );
   const searchValidation = getSearchValidation(query);
   const searchEmptyMessage = view === 'scanner'
     ? '스캔 또는 직접 입력 결과를 기준으로 후보를 보여드립니다.'
@@ -356,9 +387,25 @@ export default function KrsMasterApp() {
         }
       }
     };
+    const loadSavedConvert = async () => {
+      try {
+        const result = await listSavedConvertSets();
+        if (!cancelled) {
+          setSavedConvertSets(result.items);
+          if (!result.items.length) {
+            setSavedConvertMessage('저장된 변환 결과가 없습니다.');
+          }
+        }
+      } catch {
+        if (!cancelled) {
+          setSavedConvertMessage('저장된 변환 결과 목록을 불러오지 못했습니다.');
+        }
+      }
+    };
     void load();
     void loadBundle();
     void loadPhotoOcr();
+    void loadSavedConvert();
     return () => {
       cancelled = true;
     };
@@ -483,15 +530,16 @@ export default function KrsMasterApp() {
     setStorageMessage('마스터를 서버와 브라우저 저장소에 반영하고 있습니다.');
     try {
       const parsed = await parseMasterFile(file);
-      await uploadMasterToServer(file);
-      const nextHistory = buildNextHistory(history, file.name, parsed.summary);
-      await savePersistedState({ records: parsed.records, summary: parsed.summary, history: nextHistory, savedAt: new Date().toISOString() });
+      const serverResult = await uploadMasterToServer(file);
+      const normalizedSummary = { ...parsed.summary, fileName: serverResult.summary.fileName };
+      const nextHistory = buildNextHistory(history, normalizedSummary.fileName, normalizedSummary);
+      await savePersistedState({ records: parsed.records, summary: normalizedSummary, history: nextHistory, savedAt: new Date().toISOString() });
       setRecords(parsed.records);
-      setSummary(parsed.summary);
+      setSummary(normalizedSummary);
       setHistory(nextHistory);
       setStorageStatus('loaded');
       setStorageMessage('서버 마스터 동기화 완료');
-      setUploadMessage(`${parsed.summary.recordCount.toLocaleString()}건 업로드 완료`);
+      setUploadMessage(`${normalizedSummary.recordCount.toLocaleString()}건 업로드 완료`);
       setView('search');
     } catch (error) {
       setStorageStatus('error');
@@ -623,6 +671,8 @@ export default function KrsMasterApp() {
       setConvertSummary(result.summary);
       setConvertWarnings(result.warnings);
       setConvertQuery('');
+      setConvertSaveName(buildDefaultSaveName(result.summary.fileName));
+      setConvertSavedMeta(null);
       setConvertMessage(
         `${result.summary.recordCount.toLocaleString()}건을 바코드 리스트로 변환했습니다.${result.warnings.length ? ` 제외 ${result.warnings.length.toLocaleString()}건` : ''}`,
       );
@@ -658,6 +708,7 @@ export default function KrsMasterApp() {
       setPhotoProgress(8);
       setPhotoMessage(null);
       const result = await uploadInventoryPhoto(file);
+      setPhotoPreviewName(result.summary.fileName);
       const hydratedRows = result.items.map((item) => ({
         ...item,
         name: masterRecordByBarcode.get(item.barcode)?.name ?? item.name,
@@ -668,6 +719,8 @@ export default function KrsMasterApp() {
         importedAt: result.summary.importedAt,
         recordCount: (prev?.recordCount ?? 0) + result.items.length,
       }));
+      setPhotoServerSaveName((prev) => prev || buildDefaultSaveName(result.summary.fileName));
+      setPhotoSavedMeta(null);
       setPhotoWarnings((prev) => [...prev, ...result.warnings]);
       setPhotoMessage(
         `${result.items.length.toLocaleString()}건을 추가 추출했습니다. 표에서 바로 수정한 뒤 임시 저장 또는 엑셀 다운로드할 수 있습니다.`,
@@ -745,11 +798,151 @@ export default function KrsMasterApp() {
       setPhotoSummary(null);
       setPhotoRows([]);
       setPhotoWarnings([]);
+      setPhotoSavedMeta(null);
       setPhotoMessage('사진 OCR 임시 저장 데이터를 삭제했습니다.');
     } catch {
       setPhotoMessage('사진 OCR 임시 저장 데이터 삭제에 실패했습니다.');
     } finally {
       setPhotoSaveBusy(false);
+    }
+  };
+
+  const refreshSavedConvertSets = async (nextMessage?: string) => {
+    try {
+      const result = await listSavedConvertSets();
+      setSavedConvertSets(result.items);
+      if (nextMessage) {
+        setSavedConvertMessage(nextMessage);
+      } else if (!result.items.length) {
+        setSavedConvertMessage('저장된 변환 결과가 없습니다.');
+      }
+    } catch (error) {
+      setSavedConvertMessage(error instanceof Error ? error.message : '저장된 변환 결과 목록을 불러오지 못했습니다.');
+    }
+  };
+
+  const saveCurrentConvertResult = async (sourceType: ConvertSaveSourceType) => {
+    const name = (sourceType === 'file' ? convertSaveName : photoServerSaveName).trim();
+    const rows: SavedConvertRow[] = sourceType === 'file'
+      ? convertedItems.map((item) => ({ barcode: item.barcode, name: item.name, rowNumber: item.rowNumber }))
+      : photoRows.map((item) => ({ barcode: item.barcode, name: item.name, rowNumber: item.rowNumber }));
+    const sourceFileName = sourceType === 'file' ? (convertSummary?.fileName ?? '') : (photoSummary?.fileName ?? '');
+
+    if (!name) {
+      const message = '저장 이름을 입력해 주세요.';
+      if (sourceType === 'file') setConvertMessage(message);
+      else setPhotoMessage(message);
+      return;
+    }
+
+    if (!rows.length || !sourceFileName) {
+      const message = sourceType === 'file' ? '저장할 변환 결과가 없습니다.' : '저장할 사진 OCR 결과가 없습니다.';
+      if (sourceType === 'file') setConvertMessage(message);
+      else setPhotoMessage(message);
+      return;
+    }
+
+    try {
+      setSavedConvertBusy(true);
+      const result = await saveConvertSet({ name, sourceType, sourceFileName, rows });
+      await refreshSavedConvertSets(`${result.item.name} 저장본을 서버 DB에 저장했습니다.`);
+      setSavedConvertSelection((prev) => ({ ...prev, [sourceType]: result.item.id }));
+      if (sourceType === 'file') {
+        setConvertSavedMeta({ savedName: result.item.name, updatedAt: result.item.updatedAt });
+        setConvertSummary((prev) => (prev ? { ...prev, fileName: result.item.sourceFileName, savedName: result.item.name } : prev));
+        setConvertMessage(`${result.item.recordCount.toLocaleString()}건 변환 결과를 서버 저장했습니다.`);
+      } else {
+        setPhotoSavedMeta({ savedName: result.item.name, updatedAt: result.item.updatedAt });
+        setPhotoSummary((prev) => (prev ? { ...prev, fileName: result.item.sourceFileName, savedName: result.item.name } : prev));
+        setPhotoMessage(`${result.item.recordCount.toLocaleString()}건 사진 OCR 결과를 서버 저장했습니다.`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '변환 결과 저장에 실패했습니다.';
+      if (sourceType === 'file') setConvertMessage(message);
+      else setPhotoMessage(message);
+    } finally {
+      setSavedConvertBusy(false);
+    }
+  };
+
+  const loadSavedConvertResult = async (sourceType: ConvertSaveSourceType, rawId: string) => {
+    const id = Number.parseInt(rawId, 10);
+    if (!Number.isInteger(id) || id < 1) {
+      setSavedConvertSelection((prev) => ({ ...prev, [sourceType]: '' }));
+      return;
+    }
+
+    try {
+      setSavedConvertBusy(true);
+      const result = await fetchSavedConvertSet(id);
+      const item = result.item;
+      setSavedConvertSelection((prev) => ({ ...prev, [sourceType]: item.id }));
+
+      if (sourceType === 'file') {
+        const loadedItems = item.rows.map((row) => ({ barcode: row.barcode, name: row.name, rowNumber: row.rowNumber }));
+        setConvertedItems(loadedItems);
+        setConvertWarnings([]);
+        setConvertQuery('');
+        setConvertSummary({
+          fileName: item.sourceFileName,
+          importedAt: item.updatedAt,
+          recordCount: item.recordCount,
+          skippedRows: 0,
+          savedName: item.name,
+        });
+        setConvertSavedMeta({ savedName: item.name, updatedAt: item.updatedAt });
+        setConvertSaveName(item.name);
+        setConvertMessage(`${item.name} 저장본을 불러왔습니다.`);
+      } else {
+        setPhotoRows(item.rows.map((row) => ({ barcode: row.barcode, name: row.name, rowNumber: row.rowNumber })));
+        setPhotoWarnings([]);
+        setPhotoSummary({
+          fileName: item.sourceFileName,
+          importedAt: item.updatedAt,
+          recordCount: item.recordCount,
+          savedName: item.name,
+        });
+        setPhotoSavedMeta({ savedName: item.name, updatedAt: item.updatedAt });
+        setPhotoServerSaveName(item.name);
+        setPhotoMessage(`${item.name} 저장본을 불러왔습니다.`);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '저장된 변환 결과를 불러오지 못했습니다.';
+      if (sourceType === 'file') setConvertMessage(message);
+      else setPhotoMessage(message);
+    } finally {
+      setSavedConvertBusy(false);
+    }
+  };
+
+  const removeSavedConvertResult = async (sourceType: ConvertSaveSourceType) => {
+    const selectedId = savedConvertSelection[sourceType];
+    if (!selectedId) {
+      const message = '삭제할 저장 결과를 먼저 선택해 주세요.';
+      if (sourceType === 'file') setConvertMessage(message);
+      else setPhotoMessage(message);
+      return;
+    }
+
+    try {
+      setSavedConvertBusy(true);
+      const selectedSummary = savedConvertSets.find((item) => item.id === selectedId);
+      await deleteSavedConvertSet(selectedId);
+      await refreshSavedConvertSets(`${selectedSummary?.name ?? '선택한 저장본'}을 삭제했습니다.`);
+      setSavedConvertSelection((prev) => ({ ...prev, [sourceType]: '' }));
+      if (sourceType === 'file') {
+        setConvertSavedMeta(null);
+        setConvertMessage('서버 저장 결과를 삭제했습니다.');
+      } else {
+        setPhotoSavedMeta(null);
+        setPhotoMessage('서버 저장 결과를 삭제했습니다.');
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : '저장된 변환 결과 삭제에 실패했습니다.';
+      if (sourceType === 'file') setConvertMessage(message);
+      else setPhotoMessage(message);
+    } finally {
+      setSavedConvertBusy(false);
     }
   };
 
@@ -847,7 +1040,7 @@ export default function KrsMasterApp() {
           {view === 'search' && <SearchPanel query={query} setQuery={setQuery} onSearch={runSearch} onClear={() => { setQuery(''); setSubmittedQuery(''); }} validationMessage={searchValidation.message} searchEnabled={searchValidation.canSearch} />}
           {view === 'import' && <ImportPanel inputRef={inputRef} uploading={uploading} uploadMessage={uploadMessage} onChoose={() => inputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await saveMasterFile(file); event.target.value = ''; }} />}
           {view === 'bundle' && <BundlePanel bundleTab={bundleTab} setBundleTab={setBundleTab} onOpenReportStatus={() => void openBundleReportStatus()} bundleForm={bundleForm} setBundleForm={setBundleForm} bundleReportBusy={bundleReportBusy} bundleReportMessage={bundleReportMessage} onSave={saveBundleReport} onDownload={downloadBundleDb} bundleReportRows={bundleReportRows} bundleReportRowsBusy={bundleReportRowsBusy} bundleReportRowsMessage={bundleReportRowsMessage} editingReportId={editingReportId} editingReportForm={editingReportForm} setEditingReportForm={setEditingReportForm} onRefreshReportRows={() => void loadBundleReportRows()} onStartEdit={startEditBundleReport} onCancelEdit={cancelEditBundleReport} onSaveEdit={() => void saveEditedBundleReport()} onDelete={(id) => void removeBundleReport(id)} bundleMasterInputRef={bundleMasterInputRef} bundleMasterBusy={bundleMasterBusy} bundleMasterMessage={bundleMasterMessage} bundleMasterSummary={bundleMasterSummary} onPickBundleMaster={() => bundleMasterInputRef.current?.click()} onBundleMasterFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await uploadBundleMasterFile(file); event.target.value = ''; }} bundleLookupQuery={bundleLookupQuery} setBundleLookupQuery={setBundleLookupQuery} bundleLookupItems={bundleLookupItems} bundleLookupBusy={bundleLookupBusy} bundleLookupMessage={bundleLookupMessage} onLookup={() => void loadBundleLookup(bundleLookupQuery)} />}
-          {view === 'convert' && <ConvertPanel inputRef={convertInputRef} busy={convertBusy} message={convertMessage} summary={convertSummary} items={filteredConvertedItems} totalItems={convertedItems.length} warnings={convertWarnings} query={convertQuery} setQuery={setConvertQuery} onChoose={() => convertInputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertFileToBarcodeList(file); event.target.value = ''; }} photoInputRef={photoInputRef} photoGalleryInputRef={photoGalleryInputRef} photoBusy={photoBusy} photoMessage={photoMessage} photoSummary={photoSummary} photoRows={photoRows} photoWarnings={photoWarnings} onChoosePhoto={() => photoInputRef.current?.click()} onChoosePhotoFromLibrary={() => photoGalleryInputRef.current?.click()} onPhotoFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertInventoryPhoto(file); event.target.value = ''; }} onChangePhotoRow={updatePhotoRow} onDownloadPhotoRows={downloadPhotoRowsAsExcel} onSavePhotoRows={savePhotoRowsToDevice} onClearPhotoRows={clearSavedPhotoRows} photoSaveBusy={photoSaveBusy} photoProgress={photoProgress} photoPreviewUrl={photoPreviewUrl} photoPreviewName={photoPreviewName} photoPreviewMeta={photoPreviewMeta} masterRecordByBarcode={masterRecordByBarcode} />}
+          {view === 'convert' && <ConvertPanel inputRef={convertInputRef} busy={convertBusy} message={convertMessage} summary={convertSummary} items={filteredConvertedItems} totalItems={convertedItems.length} warnings={convertWarnings} query={convertQuery} setQuery={setConvertQuery} onChoose={() => convertInputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertFileToBarcodeList(file); event.target.value = ''; }} convertSaveName={convertSaveName} setConvertSaveName={setConvertSaveName} convertSavedMeta={convertSavedMeta} fileSavedConvertSets={fileSavedConvertSets} savedConvertBusy={savedConvertBusy} savedConvertSelection={savedConvertSelection.file} savedConvertMessage={savedConvertMessage} onSaveCurrentConvert={() => void saveCurrentConvertResult('file')} onLoadSavedConvert={(id) => void loadSavedConvertResult('file', id)} onDeleteSavedConvert={() => void removeSavedConvertResult('file')} photoInputRef={photoInputRef} photoGalleryInputRef={photoGalleryInputRef} photoBusy={photoBusy} photoMessage={photoMessage} photoSummary={photoSummary} photoRows={photoRows} photoWarnings={photoWarnings} photoServerSaveName={photoServerSaveName} setPhotoServerSaveName={setPhotoServerSaveName} photoSavedMeta={photoSavedMeta} photoSavedConvertSets={photoSavedConvertSets} photoSavedConvertSelection={savedConvertSelection.photo} onChoosePhoto={() => photoInputRef.current?.click()} onChoosePhotoFromLibrary={() => photoGalleryInputRef.current?.click()} onPhotoFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertInventoryPhoto(file); event.target.value = ''; }} onChangePhotoRow={updatePhotoRow} onDownloadPhotoRows={downloadPhotoRowsAsExcel} onSavePhotoRows={savePhotoRowsToDevice} onSavePhotoRowsToServer={() => void saveCurrentConvertResult('photo')} onLoadSavedPhotoConvert={(id) => void loadSavedConvertResult('photo', id)} onDeleteSavedPhotoConvert={() => void removeSavedConvertResult('photo')} onClearPhotoRows={clearSavedPhotoRows} photoSaveBusy={photoSaveBusy} photoProgress={photoProgress} photoPreviewUrl={photoPreviewUrl} photoPreviewName={photoPreviewName} photoPreviewMeta={photoPreviewMeta} masterRecordByBarcode={masterRecordByBarcode} />}
           {(view === 'scanner' || view === 'search') && <MatchSection exactMatch={exactMatch} similarMatches={similarMatches} emptyMessage={searchEmptyMessage} />}
         </div>
         <aside className="space-y-6">
@@ -858,7 +1051,7 @@ export default function KrsMasterApp() {
             {bundleMasterSummary ? <><MetricRow label="파일명" value={bundleMasterSummary.fileName} /><MetricRow label="레코드" value={`${bundleMasterSummary.recordCount.toLocaleString()}건`} /><MetricRow label="업로드 시각" value={formatDate(bundleMasterSummary.importedAt)} /></> : <p className="text-sm text-[#5b6670]">번들 마스터가 아직 없습니다.</p>}
           </Panel>
           <Panel title="변환 현황" icon={<DescriptionIcon className="h-5 w-5" />}>
-            {convertSummary ? <><MetricRow label="파일명" value={convertSummary.fileName} /><MetricRow label="변환 건수" value={`${convertSummary.recordCount.toLocaleString()}건`} /><MetricRow label="제외 행" value={`${convertSummary.skippedRows.toLocaleString()}건`} /><MetricRow label="변환 시각" value={formatDate(convertSummary.importedAt)} /></> : <p className="text-sm text-[#5b6670]">아직 변환한 파일이 없습니다.</p>}
+            {convertSummary ? <><MetricRow label="파일명" value={convertSummary.fileName} />{convertSummary.savedName ? <MetricRow label="저장 이름" value={convertSummary.savedName} /> : null}<MetricRow label="변환 건수" value={`${convertSummary.recordCount.toLocaleString()}건`} /><MetricRow label="제외 행" value={`${convertSummary.skippedRows.toLocaleString()}건`} /><MetricRow label="변환 시각" value={formatDate(convertSummary.importedAt)} /></> : <p className="text-sm text-[#5b6670]">아직 변환한 파일이 없습니다.</p>}
           </Panel>
           <Panel title="최근 업로드" icon={<HistoryIcon className="h-5 w-5" />}>
             {history.length === 0 ? <p className="text-sm text-[#5b6670]">업로드 기록이 없습니다.</p> : history.map((item) => <div key={item.id}><ImportHistory item={item} /></div>)}
@@ -929,6 +1122,16 @@ function ConvertPanel(props: {
   setQuery: React.Dispatch<React.SetStateAction<string>>;
   onChoose: () => void;
   onFile: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
+  convertSaveName: string;
+  setConvertSaveName: React.Dispatch<React.SetStateAction<string>>;
+  convertSavedMeta: SavedConvertMeta | null;
+  fileSavedConvertSets: SavedConvertSetSummary[];
+  savedConvertBusy: boolean;
+  savedConvertSelection: number | '';
+  savedConvertMessage: string | null;
+  onSaveCurrentConvert: () => void;
+  onLoadSavedConvert: (id: string) => void;
+  onDeleteSavedConvert: () => void;
   photoInputRef: React.RefObject<HTMLInputElement | null>;
   photoGalleryInputRef: React.RefObject<HTMLInputElement | null>;
   photoBusy: boolean;
@@ -936,12 +1139,20 @@ function ConvertPanel(props: {
   photoSummary: InventoryPhotoSummary | null;
   photoRows: InventoryPhotoRow[];
   photoWarnings: string[];
+  photoServerSaveName: string;
+  setPhotoServerSaveName: React.Dispatch<React.SetStateAction<string>>;
+  photoSavedMeta: SavedConvertMeta | null;
+  photoSavedConvertSets: SavedConvertSetSummary[];
+  photoSavedConvertSelection: number | '';
   onChoosePhoto: () => void;
   onChoosePhotoFromLibrary: () => void;
   onPhotoFile: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void>;
   onChangePhotoRow: (index: number, key: 'barcode' | 'name', value: string) => void;
   onDownloadPhotoRows: () => void;
   onSavePhotoRows: () => void;
+  onSavePhotoRowsToServer: () => void;
+  onLoadSavedPhotoConvert: (id: string) => void;
+  onDeleteSavedPhotoConvert: () => void;
   onClearPhotoRows: () => void;
   photoSaveBusy: boolean;
   photoProgress: number;
@@ -1014,7 +1225,7 @@ function ConvertPanel(props: {
           </div>
         )}
         {props.photoMessage && !props.photoBusy && <div className="mt-4 rounded-[1.5rem] border border-[#dce6f0] bg-[#f8fbfd] p-4 text-sm text-[#5b6670]">{props.photoMessage}</div>}
-        {props.photoSummary && <div className="mt-4 rounded-[1.5rem] bg-[#edf4fb] p-4 text-sm text-[#002542]">{props.photoSummary.fileName} / {props.photoSummary.recordCount.toLocaleString()}건 / {formatDate(props.photoSummary.importedAt)}</div>}
+        {props.photoSummary && <div className="mt-4 rounded-[1.5rem] bg-[#edf4fb] p-4 text-sm text-[#002542]">{props.photoSummary.savedName ? `${props.photoSummary.savedName} / ` : ''}{props.photoSummary.fileName} / {props.photoSummary.recordCount.toLocaleString()}건 / {formatDate(props.photoSummary.importedAt)}</div>}
         {(props.photoPreviewName || props.photoPreviewUrl) && (
           <div className="mt-4 rounded-[1.5rem] border border-[#dce6f0] bg-white p-4">
             <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
@@ -1034,8 +1245,21 @@ function ConvertPanel(props: {
           <div className="flex flex-wrap gap-3">
             <div className="rounded-2xl bg-[#edf4fb] px-4 py-3 text-sm font-semibold text-[#002542]">총 {props.photoRows.length.toLocaleString()}건</div>
             <button onClick={props.onSavePhotoRows} disabled={props.photoSaveBusy || props.photoRows.length === 0} className="rounded-2xl bg-[#174f83] px-5 py-3 font-semibold text-white disabled:opacity-60">임시 저장</button>
-            <button onClick={props.onClearPhotoRows} disabled={props.photoSaveBusy || props.photoRows.length === 0} className="rounded-2xl bg-[#ffe7e5] px-5 py-3 font-semibold text-[#93000a] disabled:opacity-60">삭제</button>
+            <button onClick={props.onSavePhotoRowsToServer} disabled={props.savedConvertBusy || props.photoRows.length === 0} className="rounded-2xl bg-[#8a5100] px-5 py-3 font-semibold text-white disabled:opacity-60">서버 저장</button>
+            <button onClick={props.onClearPhotoRows} disabled={props.photoSaveBusy || props.photoRows.length === 0} className="rounded-2xl bg-[#ffe7e5] px-5 py-3 font-semibold text-[#93000a] disabled:opacity-60">임시 저장 삭제</button>
             <button onClick={props.onDownloadPhotoRows} disabled={props.photoRows.length === 0} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white disabled:opacity-60">엑셀 다운로드</button>
+          </div>
+          <div className="mt-4 space-y-3 rounded-[1.5rem] border border-[#f2d4ad] bg-[#fff7ed] p-4">
+            <div className="flex flex-col gap-3 md:flex-row">
+              <input value={props.photoServerSaveName} onChange={(event) => props.setPhotoServerSaveName(event.target.value)} placeholder="사진 OCR 저장 이름" className="flex-1 rounded-2xl border border-[#efc58f] bg-white px-4 py-3 outline-none" />
+              <select value={props.photoSavedConvertSelection} onChange={(event) => props.onLoadSavedPhotoConvert(event.target.value)} className="min-w-[14rem] rounded-2xl border border-[#efc58f] bg-white px-4 py-3 outline-none">
+                <option value="">저장본 선택</option>
+                {props.photoSavedConvertSets.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.recordCount}건</option>)}
+              </select>
+              <button onClick={props.onDeleteSavedPhotoConvert} disabled={props.savedConvertBusy || !props.photoSavedConvertSelection} className="rounded-2xl bg-[#ffe7e5] px-4 py-3 font-semibold text-[#93000a] disabled:opacity-60">서버 삭제</button>
+            </div>
+            {props.photoSavedMeta && <p className="text-sm text-[#8a5100]">현재 서버 저장본: {props.photoSavedMeta.savedName} / {formatDate(props.photoSavedMeta.updatedAt)}</p>}
+            {props.savedConvertMessage && <p className="text-sm text-[#8a5100]">{props.savedConvertMessage}</p>}
           </div>
           <div className="mt-6 space-y-4">
             {props.photoRows.length === 0 && !props.photoBusy && <div className="rounded-[1.5rem] border border-[#dce6f0] bg-[#f8fbfd] p-5 text-sm text-[#5b6670]">아직 추출된 표가 없습니다.</div>}
@@ -1075,8 +1299,23 @@ function ConvertPanel(props: {
 
       <section className="grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
         <Panel title="변환 결과" icon={<CheckCircleIcon className="h-5 w-5" />}>
+          <div className="mb-4 space-y-3 rounded-[1.5rem] border border-[#dce6f0] bg-[#f8fbfd] p-4">
+            <div className="flex flex-col gap-3 md:flex-row">
+              <input value={props.convertSaveName} onChange={(event) => props.setConvertSaveName(event.target.value)} placeholder="변환 결과 저장 이름" className="flex-1 rounded-2xl border border-[#d6e0ea] bg-white px-4 py-3 outline-none" />
+              <button onClick={props.onSaveCurrentConvert} disabled={props.savedConvertBusy || props.totalItems === 0} className="rounded-2xl bg-[#8a5100] px-5 py-3 font-semibold text-white disabled:opacity-60">서버 저장</button>
+            </div>
+            <div className="flex flex-col gap-3 md:flex-row">
+              <select value={props.savedConvertSelection} onChange={(event) => props.onLoadSavedConvert(event.target.value)} className="flex-1 rounded-2xl border border-[#d6e0ea] bg-white px-4 py-3 outline-none">
+                <option value="">저장본 선택</option>
+                {props.fileSavedConvertSets.map((item) => <option key={item.id} value={item.id}>{item.name} · {item.recordCount}건</option>)}
+              </select>
+              <button onClick={props.onDeleteSavedConvert} disabled={props.savedConvertBusy || !props.savedConvertSelection} className="rounded-2xl bg-[#ffe7e5] px-4 py-3 font-semibold text-[#93000a] disabled:opacity-60">서버 삭제</button>
+            </div>
+            {props.convertSavedMeta && <p className="text-sm text-[#5b6670]">현재 서버 저장본: {props.convertSavedMeta.savedName} / {formatDate(props.convertSavedMeta.updatedAt)}</p>}
+            {props.savedConvertMessage && <p className="text-sm text-[#5b6670]">{props.savedConvertMessage}</p>}
+          </div>
           <input value={props.query} onChange={(event) => props.setQuery(event.target.value)} placeholder="상품명 또는 바코드 필터" className="w-full rounded-2xl border border-[#d6e0ea] bg-white px-5 py-4 outline-none" />
-          {props.summary && <p className="mt-4 text-sm text-[#5b6670]">{props.summary.fileName} / {props.items.length.toLocaleString()}건 표시 중 / 전체 {props.totalItems.toLocaleString()}건</p>}
+          {props.summary && <p className="mt-4 text-sm text-[#5b6670]">{props.summary.savedName ? `${props.summary.savedName} / ` : ''}{props.summary.fileName} / {props.items.length.toLocaleString()}건 표시 중 / 전체 {props.totalItems.toLocaleString()}건</p>}
           <div className="mt-6 space-y-4">
             {!props.busy && props.items.length === 0 && <div className="rounded-[1.5rem] border border-[#dce6f0] bg-[#f8fbfd] p-5 text-sm text-[#5b6670]">{props.totalItems === 0 ? '변환된 데이터가 없습니다.' : '필터 결과가 없습니다.'}</div>}
             {props.items.map((item) => <div key={`${item.rowNumber}-${item.barcode}`}><ConvertedBarcodeCard item={item} masterName={props.masterRecordByBarcode.get(item.barcode)?.name ?? null} /></div>)}
@@ -1267,7 +1506,22 @@ function MatchSection({ exactMatch, similarMatches, emptyMessage }: { exactMatch
 }
 
 function MatchCard({ match, emphasize = false }: { match: BarcodeMatch; emphasize?: boolean }) {
-  return <div className={`rounded-[1.75rem] border p-5 ${emphasize ? 'border-[#b6e1bd] bg-[#eef8ee]' : 'border-[#dce6f0] bg-[#f8fbfd]'}`}><div className="flex flex-col gap-4 md:flex-row md:justify-between"><div><p className="font-mono text-lg font-bold text-[#002542]">{match.record.barcode}</p><p className="mt-2 text-lg font-bold text-[#171c1f]">{match.record.name || '-'}</p><p className="mt-1 text-sm text-[#5b6670]">축약명 {match.record.shortName || '-'}</p></div><div className="flex flex-col items-start gap-2 md:items-end"><span className={`rounded-full px-3 py-1 text-xs font-bold ${emphasize ? 'bg-[#dff3e3] text-[#005c29]' : 'bg-[#e7f0fb] text-[#174f83]'}`}>{match.matchType === 'exact' ? 'EXACT' : match.matchType.toUpperCase()}</span><span className="text-sm text-[#5b6670]">유사도 {formatSimilarity(match.score)}</span></div></div>{match.reasons.length > 0 && <div className="mt-4 flex flex-wrap gap-2">{match.reasons.map((reason) => <span key={reason} className="rounded-full border border-[#dce6f0] bg-white px-3 py-1 text-xs text-[#5b6670]">{reason}</span>)}</div>}<div className="mt-4"><BarcodePreview value={match.record.barcode} /></div></div>;
+  const isBundle = match.record.shortName.trim() === '';
+  const cardTone = isBundle
+    ? 'border-[#efc58f] bg-[#fff4e6]'
+    : emphasize
+      ? 'border-[#b6e1bd] bg-[#eef8ee]'
+      : 'border-[#dce6f0] bg-[#f8fbfd]';
+  const statusTone = isBundle
+    ? 'bg-[#ffe1bf] text-[#8a5100]'
+    : emphasize
+      ? 'bg-[#dff3e3] text-[#005c29]'
+      : 'bg-[#e7f0fb] text-[#174f83]';
+  const reasonTone = isBundle
+    ? 'border-[#f1d4aa] bg-white text-[#8a5100]'
+    : 'border-[#dce6f0] bg-white text-[#5b6670]';
+
+  return <div className={`rounded-[1.75rem] border p-5 ${cardTone}`}><div className="flex flex-col gap-4 md:flex-row md:justify-between"><div><p className="font-mono text-lg font-bold text-[#002542]">{match.record.barcode}</p><p className="mt-2 text-lg font-bold text-[#171c1f]">{match.record.name || '-'}</p><p className="mt-1 text-sm text-[#5b6670]">축약명 {match.record.shortName || '-'}</p></div><div className="flex flex-col items-start gap-2 md:items-end"><div className="flex flex-wrap gap-2 md:justify-end"><span className={`rounded-full px-3 py-1 text-xs font-bold ${statusTone}`}>{match.matchType === 'exact' ? 'EXACT' : match.matchType.toUpperCase()}</span>{isBundle && <span className="rounded-full bg-[#ffb86b] px-3 py-1 text-xs font-bold text-[#6a3900]">번들</span>}</div><span className="text-sm text-[#5b6670]">유사도 {formatSimilarity(match.score)}</span></div></div>{match.reasons.length > 0 && <div className="mt-4 flex flex-wrap gap-2">{match.reasons.map((reason) => <span key={reason} className={`rounded-full border px-3 py-1 text-xs ${reasonTone}`}>{reason}</span>)}</div>}<div className="mt-4"><BarcodePreview value={match.record.barcode} /></div></div>;
 }
 
 function BundleCard({ item }: { item: BundleMasterRecord }) {
@@ -1560,6 +1814,13 @@ function formatDate(value: string) {
 function formatNowForFile() {
   const now = new Date();
   return `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, '0')}${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}${String(now.getMinutes()).padStart(2, '0')}`;
+}
+
+function buildDefaultSaveName(fileName: string) {
+  const trimmed = fileName.trim();
+  if (!trimmed) return `변환결과_${formatNowForFile()}`;
+  const dotIndex = trimmed.lastIndexOf('.');
+  return dotIndex > 0 ? trimmed.slice(0, dotIndex) : trimmed;
 }
 
 function createHistoryId() {

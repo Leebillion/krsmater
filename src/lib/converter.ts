@@ -11,6 +11,7 @@ export type ConvertedBarcodeSummary = {
   importedAt: string;
   recordCount: number;
   skippedRows: number;
+  savedName?: string;
 };
 
 export type ConvertedBarcodeResult = {

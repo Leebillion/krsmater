@@ -3,7 +3,7 @@
 ## Overview
 KRS Master is a web app for importing a product master file, syncing the active master through the server, searching products, scanning QR/barcodes, and matching scanned values to existing master barcodes even when they are not perfectly identical.
 
-It also supports PWA installation with standalone launch behavior.
+It also supports PWA installation with standalone launch behavior, bundle workflows, barcode conversion, and photo/PDF OCR conversion.
 
 ## Current User Flow
 1. User opens the web app.
@@ -14,9 +14,12 @@ It also supports PWA installation with standalone launch behavior.
 6. User can search by barcode, product name, or short name.
 7. User can open the scanner screen and scan QR/barcodes.
 8. App shows exact matches first, then similar barcode candidates.
-9. Each result card also renders a barcode that can be scanned by another scanner.
-10. Installed users can relaunch the app from the home screen.
-11. If a new deployed version is ready, the app shows an update banner before refresh.
+9. Match cards with empty `shortName` are highlighted as bundle-style products.
+10. User can convert Excel/CSV input into barcode result cards.
+11. User can convert photo/PDF inventory sheets through OCR.
+12. User can temporarily save OCR rows on-device or save convert/OCR results to server DB with a custom name.
+13. Installed users can relaunch the app from the home screen.
+14. If a new deployed version is ready, the app shows an update banner before refresh.
 
 ## Current Data Model
 Master file is treated as a fixed-width text file.
@@ -46,9 +49,11 @@ Main files:
 - upload flow
 - search flow
 - scanner flow
+- convert and OCR result rendering
 - local restore and server sync coordination
 - scanner preference persistence
 - local draft persistence for in-progress form/input values
+- server-side convert save/load/delete UI
 - update/offline readiness banners
 
 ### `src/main.tsx` / `vite.config.ts`
@@ -65,14 +70,20 @@ Main files:
 ### `src/lib/persistence.ts`
 - IndexedDB open/load/save/delete helpers
 - stores cached records, summary, and upload history in browser storage
+- stores temporary photo OCR rows per device
 
 ### `src/lib/api.ts`
-- client API wrappers for master sync and bundle features
+- client API wrappers for master sync
+- bundle CRUD APIs
+- OCR upload API
+- convert saved-set APIs
 
 ### `server/index.js` / `server/db.js`
 - active master storage
 - bundle report CRUD
 - bundle master upload/search
+- convert saved-set CRUD
+- Korean filename normalization for multipart uploads
 - SQLite persistence
 
 ## Current Matching Logic
@@ -89,6 +100,12 @@ Matching includes:
 
 Top candidates are sorted by score and only a limited number are shown.
 
+Display-only bundle highlighting:
+
+- if `shortName` is empty, the card is treated as bundle-style
+- bundle-style cards use an orange tone
+- bundle-style cards show a `번들` badge
+
 ## Current Persistence Behavior
 After import:
 
@@ -102,12 +119,15 @@ During normal use:
 - search/scanner input is stored locally as draft state
 - bundle report form and editing form are stored locally as draft state
 - draft state is restored after refresh or update
+- photo OCR rows can be temporarily saved in IndexedDB
+- convert results and photo OCR result sets can be saved in server SQLite with an operator-defined name
 
 After reload:
 
 - app hydrates from IndexedDB
 - app checks for a newer active server master
 - newer server data replaces stale local cache
+- saved convert result sets remain available from the server across devices
 
 ## Current Scanner Behavior
 Two scanner paths exist:
@@ -123,6 +143,26 @@ Current behavior:
 - successful reads briefly show `스캔성공`
 - if scanner was previously enabled, the next visit auto-attempts camera activation
 - if browser is not in a secure context, an explanatory error is shown
+
+## Current Upload Filename Handling
+- multipart upload filenames are normalized server-side before they are stored or returned in summaries
+- intended goal is to reduce Korean filename mojibake from browser/server encoding mismatch
+- current normalization prefers the original filename unless `latin1 -> utf8` recovery is clearly more readable
+
+## Current Saved Convert Result Behavior
+- saved result tables:
+  - `convert_saved_sets`
+  - `convert_saved_rows`
+- supported sources:
+  - `file`
+  - `photo`
+- save names are globally unique
+- APIs:
+  - `GET /api/convert/saved`
+  - `GET /api/convert/saved/:id`
+  - `POST /api/convert/saved`
+  - `DELETE /api/convert/saved/:id`
+- duplicate save names return `409`
 
 ## Current PWA Behavior
 - build generates a web app manifest and service worker
@@ -144,6 +184,7 @@ Even with fallback scanning, `navigator.mediaDevices.getUserMedia` can be blocke
 - some source/docs still contain mojibake from past encoding mismatch
 - iPhone scanning still depends on secure context and camera permission
 - installed app update behavior should be verified on real deployments
+- real-world validation is still needed for larger saved convert result sets
 
 ## Current Nginx/Deployment Assumption
 The service is deployed behind nginx.
@@ -161,13 +202,15 @@ Production artifact:
 - master upload
 - server sync + local cache restore
 - search result ranking
+- bundle-style match-card highlighting
 - barcode preview rendering
 - scanner status overlay
 - automatic scanner reactivation attempt on revisit
-- fallback ID generation when `crypto.randomUUID()` is unavailable
 - broader upload file chooser extensions: `.txt`, `.dat`, `.mst`, `.csv`
 - bundle report save / edit / delete
 - bundle master upload / lookup
 - installable PWA manifest and service worker
 - update-ready banner
 - local draft restore after refresh
+- photo OCR temporary device save
+- convert saved-set server save / load / delete

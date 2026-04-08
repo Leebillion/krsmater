@@ -12,16 +12,24 @@ Focus points:
 - iPhone fallback scanner path
 - Galaxy S25 focus / near-distance readability
 
-### 2. Clean broken Korean text / encoding issues
+### 2. Clean remaining Korean text / encoding issues
 Goal:
-- remove mojibake from source and docs so maintenance is safer
+- remove remaining mojibake from source and docs so maintenance is safer
 
-### 3. Verify installed PWA behavior
+Focus points:
+- old labels/messages still stored in source files
+- docs that were written before UTF-8 cleanup
+- any filename/path displays that still regress on specific browsers
+
+### 3. Validate named convert-result save/load flow
 Goal:
-- confirm install flow and launch quality
-- verify caching/update behavior after deployment
-- check camera/scanner behavior in standalone mode
-- verify draft restore and update banner behavior
+- confirm server-saved convert datasets are stable in real operations
+
+Focus points:
+- duplicate save-name handling
+- save/load/delete behavior across multiple devices
+- OCR saved sets versus local temporary save clarity
+- larger row-count performance
 
 ## Highest Priority
 
@@ -69,7 +77,21 @@ Expected result:
 
 ## High Priority
 
-### 4. Clean mojibake in source and docs
+### 4. Validate convert saved-set operations with real data
+Reason:
+- named server-side saves were just added
+- operational safety matters more than local happy-path validation
+
+Actions:
+- save normal convert results with real `.xlsx` and `.csv` inputs
+- save OCR results after edit, reload them, and confirm row fidelity
+- verify duplicate save names return clear UI errors
+- test deleting saved sets and reloading the list
+
+Expected result:
+- operators can reliably reuse saved convert results across visits and devices
+
+### 5. Clean mojibake in source and docs
 Reason:
 - several strings in code and markdown still show encoding damage
 - this creates maintenance and QA risk
@@ -83,7 +105,7 @@ Expected result:
 - source and docs are readable
 - labels are stable and maintainable
 
-### 5. Improve upload error reporting
+### 6. Improve upload error reporting
 Reason:
 - current failures can still look similar to end users
 - easier debugging is needed for operations
@@ -98,9 +120,9 @@ Expected result:
 
 ## Medium Priority
 
-### 6. Validate convert-tab real files
+### 7. Validate convert-tab real files
 Reason:
-- new `변환` tab assumes headers `상품코드`, `상품명`
+- convert tab assumes headers `상품코드`, `상품명`
 - Excel source files may still contain numeric cells, spaces, or leading-zero edge cases
 
 Actions:
@@ -111,7 +133,7 @@ Actions:
 Expected result:
 - conversion works reliably with real operator files
 
-### 7. Expand parser for real-world file variants
+### 8. Expand parser for real-world file variants
 Reason:
 - field assumptions may differ by actual source files
 - `.dat`, `.mst`, `.csv` are selectable but parser is still fixed-width oriented first
@@ -125,7 +147,7 @@ Actions:
 Expected result:
 - import succeeds for actual production file variants
 
-### 8. Decide whether tap-to-focus or torch UI is needed
+### 9. Decide whether tap-to-focus or torch UI is needed
 Reason:
 - some Android devices may still need extra camera assistance beyond current constraints
 
@@ -137,7 +159,7 @@ Actions:
 Expected result:
 - more reliable scanning on difficult mobile hardware
 
-### 9. Harden PWA update UX
+### 10. Harden PWA update UX
 Reason:
 - service worker caching is now enabled
 - update and cache invalidation behavior should be verified in production
@@ -158,45 +180,23 @@ Before next release:
 1. `npm install`
 2. `npm run lint`
 3. `npm run build`
-4. deploy `dist/`
-5. verify HTTPS
-6. test upload with real production master file
-7. test search
-8. test barcode rendering
-9. test scanner on Android Chrome
-10. test scanner on iPhone Safari/Chrome
-11. test scanner on Galaxy S25
-12. test installed PWA launch and update flow
+4. restart backend so new SQLite tables/routes are active
+5. deploy `dist/`
+6. verify HTTPS
+7. test upload with real production master file
+8. test search and bundle-card highlighting
+9. test barcode rendering
+10. test scanner on Android Chrome
+11. test scanner on iPhone Safari/Chrome
+12. test scanner on Galaxy S25
+13. test saved convert result flow on at least two devices
+14. test installed PWA launch and update flow
 
 ## Notes For Next Person
 - shared master sync already exists with Express + SQLite
 - local IndexedDB is now cache/restore oriented, not the only persistence layer
 - current scanner logic is in `src/KrsMasterApp.tsx`
 - parser/matching logic is in `src/lib/master.ts`
-- PWA manifest/service worker are now enabled
-- update banner and local draft restore are now enabled
+- server convert-save storage is in `server/db.js`
+- current convert save naming is globally unique across all saved sets
 - real blocking issue for iPhone is still HTTPS/certificate first, scanner fallback second
-
-## Latest Update Note
-- convert tab `변환` has been added and is working locally
-- convert parser now avoids scientific-notation barcode output for numeric Excel cells where possible
-- convert card row labels now count data rows only and exclude the header row
-- real-file validation is still needed for leading-zero preservation and operator expectations
-
-## Latest Update Note 2
-- photo OCR convert flow has been added under the convert tab
-- local verification on the provided sample photo now reaches 14 rows
-- further OCR quality tuning is still needed for occasional product-name noise on difficult rows
-- operator workflow with smartphone barcode scanning and quantity input should be tested end-to-end
-- temp-save restore behavior for OCR rows should be checked on actual mobile devices
-
-## Latest Update Note 3
-- iPhone saved-photo flow now needs real-device verification with `.heic` inputs after installing updated Python requirements on Ubuntu
-- deployment/server owners should run `python3 -m pip install -r requirements.txt`
-- if OCR still fails in production, check Ubuntu system packages for Tesseract and image libs before changing frontend code
-- after server dependency install, verify both `카메라 촬영` and `기존 사진 선택` on iPhone Safari
-
-## Latest Update Note 4
-- after server dependency install, verify scanned PDF upload under the photo OCR panel
-- confirm multi-page PDF behavior and whether merged OCR rows should stay barcode-deduped or page-grouped
-- verify convert result cards show correct master match labels with a recently uploaded product master

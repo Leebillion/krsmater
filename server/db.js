@@ -72,6 +72,27 @@ export function initializeDb() {
     `CREATE INDEX IF NOT EXISTS idx_bundle_master_bundle_name ON bundle_master_records(bundle_name)`,
     `CREATE INDEX IF NOT EXISTS idx_bundle_master_item_name ON bundle_master_records(item_name)`,
     `CREATE INDEX IF NOT EXISTS idx_bundle_master_file_id ON bundle_master_records(file_id)`,
+    `CREATE TABLE IF NOT EXISTS convert_saved_sets (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      name TEXT NOT NULL UNIQUE,
+      source_type TEXT NOT NULL,
+      source_file_name TEXT NOT NULL,
+      record_count INTEGER NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_convert_saved_sets_name ON convert_saved_sets(name)`,
+    `CREATE INDEX IF NOT EXISTS idx_convert_saved_sets_updated_at ON convert_saved_sets(updated_at)`,
+    `CREATE TABLE IF NOT EXISTS convert_saved_rows (
+      id INTEGER PRIMARY KEY AUTOINCREMENT,
+      set_id INTEGER NOT NULL,
+      barcode TEXT NOT NULL,
+      name TEXT NOT NULL,
+      row_number INTEGER NOT NULL,
+      FOREIGN KEY(set_id) REFERENCES convert_saved_sets(id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_convert_saved_rows_set_id ON convert_saved_rows(set_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_convert_saved_rows_barcode ON convert_saved_rows(barcode)`,
   ]);
 }
 
@@ -297,6 +318,94 @@ export function searchBundleMasterRecords(query = '') {
      LIMIT 200`,
     [like, like, like, like, trimmed, trimmed],
   );
+}
+
+export async function createConvertSavedSet(payload) {
+  const timestamp = new Date().toISOString();
+  await run('BEGIN TRANSACTION');
+
+  try {
+    const insertResult = await run(
+      `INSERT INTO convert_saved_sets (name, source_type, source_file_name, record_count, created_at, updated_at)
+       VALUES (?, ?, ?, ?, ?, ?)`,
+      [payload.name, payload.sourceType, payload.sourceFileName, payload.rows.length, timestamp, timestamp],
+    );
+
+    const setId = insertResult.lastID;
+    const stmt = await prepare(
+      `INSERT INTO convert_saved_rows (set_id, barcode, name, row_number)
+       VALUES (?, ?, ?, ?)`,
+    );
+
+    for (const row of payload.rows) {
+      await stmtRun(stmt, [setId, row.barcode, row.name, row.rowNumber]);
+    }
+
+    await finalize(stmt);
+    await run('COMMIT');
+
+    return getConvertSavedSetDetail(setId);
+  } catch (error) {
+    await run('ROLLBACK');
+    throw error;
+  }
+}
+
+export function listConvertSavedSets() {
+  return all(
+    `SELECT id,
+            name,
+            source_type as sourceType,
+            source_file_name as sourceFileName,
+            record_count as recordCount,
+            created_at as createdAt,
+            updated_at as updatedAt
+     FROM convert_saved_sets
+     ORDER BY updated_at DESC, id DESC`,
+  );
+}
+
+export async function getConvertSavedSetDetail(id) {
+  const summary = await get(
+    `SELECT id,
+            name,
+            source_type as sourceType,
+            source_file_name as sourceFileName,
+            record_count as recordCount,
+            created_at as createdAt,
+            updated_at as updatedAt
+     FROM convert_saved_sets
+     WHERE id = ?`,
+    [id],
+  );
+
+  if (!summary) return null;
+
+  const rows = await all(
+    `SELECT barcode,
+            name,
+            row_number as rowNumber
+     FROM convert_saved_rows
+     WHERE set_id = ?
+     ORDER BY row_number ASC, id ASC`,
+    [id],
+  );
+
+  return { ...summary, rows };
+}
+
+export async function deleteConvertSavedSet(id) {
+  await run('BEGIN TRANSACTION');
+
+  try {
+    await run('DELETE FROM convert_saved_rows WHERE set_id = ?', [id]);
+    const result = await run('DELETE FROM convert_saved_sets WHERE id = ?', [id]);
+    await run('COMMIT');
+    return result;
+  } catch (error) {
+    await run('ROLLBACK');
+    throw error;
+  }
 }
 
 function execBatch(statements) {
