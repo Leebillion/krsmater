@@ -1,8 +1,11 @@
 ﻿import React, { useEffect, useMemo, useRef, useState } from 'react';
 import * as XLSX from 'xlsx';
 import { BarcodePreview } from './components/BarcodePreview';
-import { BundleIcon, CheckCircleIcon, DescriptionIcon, HistoryIcon, InfoIcon, InventoryIcon, ScannerIcon, SearchIcon, UploadIcon } from './components/Icons';
+import { BundleIcon, CheckCircleIcon, DescriptionIcon, EditIcon, HistoryIcon, InfoIcon, InventoryIcon, LockIcon, ScannerIcon, SearchIcon, UploadIcon } from './components/Icons';
 import {
+  adminLogin,
+  adminLogout,
+  fetchAdminStatus,
   createBundleReport,
   deleteSavedConvertSet,
   deleteBundleReport,
@@ -40,7 +43,7 @@ import {
 } from './lib/persistence';
 import { type BarcodeMatch, type MasterFileSummary, type MasterRecord, findBarcodeMatches, formatSimilarity, parseMasterFile } from './lib/master';
 
-type ViewMode = 'scanner' | 'search' | 'bundle' | 'import' | 'convert';
+type ViewMode = 'scanner' | 'search' | 'bundle' | 'import' | 'convert' | 'editor';
 type BundleTab = 'report' | 'reportStatus' | 'lookup';
 type ScanStatus = 'idle' | 'starting' | 'active' | 'unsupported' | 'denied' | 'error';
 type ScanFeedback = 'idle' | 'scanning' | 'success';
@@ -85,6 +88,8 @@ const navItems = [
   { id: 'bundle' as const, label: '번들', icon: <BundleIcon /> },
   { id: 'convert' as const, label: '변환', icon: <DescriptionIcon /> },
   { id: 'import' as const, label: '업로드', icon: <UploadIcon fill /> },
+  // 관리자 전용: 마스터 편집 서버(editor/)의 비밀번호로 로그인한다.
+  { id: 'editor' as const, label: '마스터 편집', icon: <EditIcon /> },
 ];
 const scannerPreferenceKey = 'krs-master-scanner-enabled';
 const appDraftKey = 'krs-master-app-draft-v1';
@@ -167,6 +172,8 @@ export default function KrsMasterApp() {
   const [bundleReportRowsMessage, setBundleReportRowsMessage] = useState<string | null>(null);
   const [editingReportId, setEditingReportId] = useState<number | null>(null);
   const [editingReportForm, setEditingReportForm] = useState<BundleReportInput>(emptyBundleForm);
+  // null = 아직 확인 전. 관리자만 현재 마스터·번들 마스터를 교체할 수 있다.
+  const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
 
   const inputRef = useRef<HTMLInputElement | null>(null);
   const bundleMasterInputRef = useRef<HTMLInputElement | null>(null);
@@ -246,7 +253,7 @@ export default function KrsMasterApp() {
       const storedDraft = window.localStorage.getItem(appDraftKey);
       if (storedDraft) {
         const draft = JSON.parse(storedDraft) as Partial<AppDraftState>;
-        if (draft.view === 'scanner' || draft.view === 'search' || draft.view === 'bundle' || draft.view === 'import' || draft.view === 'convert') setView(draft.view);
+        if (draft.view === 'scanner' || draft.view === 'search' || draft.view === 'bundle' || draft.view === 'import' || draft.view === 'convert' || draft.view === 'editor') setView(draft.view);
         if (draft.bundleTab === 'report' || draft.bundleTab === 'reportStatus' || draft.bundleTab === 'lookup') setBundleTab(draft.bundleTab);
         if (typeof draft.query === 'string') setQuery(draft.query);
         if (typeof draft.submittedQuery === 'string') setSubmittedQuery(draft.submittedQuery);
@@ -261,6 +268,18 @@ export default function KrsMasterApp() {
       // Ignore preference restore failures.
     }
   }, []);
+
+  useEffect(() => {
+    // 업로드·마스터 편집 화면에 들어올 때마다 로그인 상태를 다시 확인한다(로그아웃·세션 만료 반영).
+    if (view !== 'import' && view !== 'editor' && isAdmin !== null) return;
+    let cancelled = false;
+    void fetchAdminStatus().then((admin) => {
+      if (!cancelled) setIsAdmin(admin);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [view]);
 
   useEffect(() => {
     try {
@@ -1034,22 +1053,25 @@ export default function KrsMasterApp() {
         </div>
       </header>
 
-      <main className="mx-auto grid max-w-7xl grid-cols-1 gap-8 px-6 pt-36 xl:grid-cols-[minmax(0,1.3fr)_24rem]">
+      <main className={view === 'editor'
+        ? 'mx-auto max-w-none px-3 pt-32 md:px-6'
+        : 'mx-auto grid max-w-7xl grid-cols-1 gap-8 px-6 pt-36 xl:grid-cols-[minmax(0,1.3fr)_24rem]'}>
         <div className="space-y-6">
           {view === 'scanner' && <ScannerPanel videoRef={videoRef} scannerEnabled={scannerEnabled} onToggleScanner={toggleScannerEnabled} scanInput={scanInput} setScanInput={setScanInput} lastScanRaw={lastScanRaw} scanStatus={scanStatus} scanFeedback={scanFeedback} scanError={scanError} onClear={() => { clearScanFeedbackTimeout(); setScanInput(''); setLastScanRaw(''); setScanFeedback(scannerEnabled ? 'scanning' : 'idle'); }} />}
           {view === 'search' && <SearchPanel query={query} setQuery={setQuery} onSearch={runSearch} onClear={() => { setQuery(''); setSubmittedQuery(''); }} validationMessage={searchValidation.message} searchEnabled={searchValidation.canSearch} />}
-          {view === 'import' && <ImportPanel inputRef={inputRef} uploading={uploading} uploadMessage={uploadMessage} onChoose={() => inputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await saveMasterFile(file); event.target.value = ''; }} />}
+          {view === 'import' && <ImportPanel isAdmin={isAdmin} onOpenEditor={() => setView('editor')} inputRef={inputRef} uploading={uploading} uploadMessage={uploadMessage} onChoose={() => inputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await saveMasterFile(file); event.target.value = ''; }} />}
+          {view === 'editor' && <MasterEditorPanel isAdmin={isAdmin} onLogin={async (password) => { await adminLogin(password); setIsAdmin(await fetchAdminStatus()); }} onLogout={async () => { await adminLogout(); setIsAdmin(false); }} />}
           {view === 'bundle' && <BundlePanel bundleTab={bundleTab} setBundleTab={setBundleTab} onOpenReportStatus={() => void openBundleReportStatus()} bundleForm={bundleForm} setBundleForm={setBundleForm} bundleReportBusy={bundleReportBusy} bundleReportMessage={bundleReportMessage} onSave={saveBundleReport} onDownload={downloadBundleDb} bundleReportRows={bundleReportRows} bundleReportRowsBusy={bundleReportRowsBusy} bundleReportRowsMessage={bundleReportRowsMessage} editingReportId={editingReportId} editingReportForm={editingReportForm} setEditingReportForm={setEditingReportForm} onRefreshReportRows={() => void loadBundleReportRows()} onStartEdit={startEditBundleReport} onCancelEdit={cancelEditBundleReport} onSaveEdit={() => void saveEditedBundleReport()} onDelete={(id) => void removeBundleReport(id)} bundleLookupQuery={bundleLookupQuery} setBundleLookupQuery={setBundleLookupQuery} bundleLookupItems={bundleLookupItems} bundleLookupBusy={bundleLookupBusy} bundleLookupMessage={bundleLookupMessage} onLookup={() => void loadBundleLookup(bundleLookupQuery)} />}
           {view === 'convert' && <ConvertPanel inputRef={convertInputRef} busy={convertBusy} message={convertMessage} summary={convertSummary} items={filteredConvertedItems} totalItems={convertedItems.length} warnings={convertWarnings} query={convertQuery} setQuery={setConvertQuery} onChoose={() => convertInputRef.current?.click()} onFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertFileToBarcodeList(file); event.target.value = ''; }} convertSaveName={convertSaveName} setConvertSaveName={setConvertSaveName} convertSavedMeta={convertSavedMeta} fileSavedConvertSets={fileSavedConvertSets} savedConvertBusy={savedConvertBusy} savedConvertSelection={savedConvertSelection.file} savedConvertMessage={savedConvertMessage} onSaveCurrentConvert={() => void saveCurrentConvertResult('file')} onLoadSavedConvert={(id) => void loadSavedConvertResult('file', id)} onDeleteSavedConvert={() => void removeSavedConvertResult('file')} photoInputRef={photoInputRef} photoGalleryInputRef={photoGalleryInputRef} photoBusy={photoBusy} photoMessage={photoMessage} photoSummary={photoSummary} photoRows={photoRows} photoWarnings={photoWarnings} photoServerSaveName={photoServerSaveName} setPhotoServerSaveName={setPhotoServerSaveName} photoSavedMeta={photoSavedMeta} photoSavedConvertSets={photoSavedConvertSets} photoSavedConvertSelection={savedConvertSelection.photo} onChoosePhoto={() => photoInputRef.current?.click()} onChoosePhotoFromLibrary={() => photoGalleryInputRef.current?.click()} onPhotoFile={async (event) => { const file = event.target.files?.[0]; if (!file) return; await convertInventoryPhoto(file); event.target.value = ''; }} onChangePhotoRow={updatePhotoRow} onDownloadPhotoRows={downloadPhotoRowsAsExcel} onSavePhotoRows={savePhotoRowsToDevice} onSavePhotoRowsToServer={() => void saveCurrentConvertResult('photo')} onLoadSavedPhotoConvert={(id) => void loadSavedConvertResult('photo', id)} onDeleteSavedPhotoConvert={() => void removeSavedConvertResult('photo')} onClearPhotoRows={clearSavedPhotoRows} photoSaveBusy={photoSaveBusy} photoProgress={photoProgress} photoPreviewUrl={photoPreviewUrl} photoPreviewName={photoPreviewName} photoPreviewMeta={photoPreviewMeta} masterRecordByBarcode={masterRecordByBarcode} />}
           {(view === 'scanner' || view === 'search') && <MatchSection exactMatch={exactMatch} similarMatches={similarMatches} emptyMessage={searchEmptyMessage} />}
         </div>
         {view === 'import' && <aside className="space-y-6">
           <Panel title="현재 마스터" icon={<InventoryIcon className="h-5 w-5" />}>
-            {summary ? <><MetricRow label="파일명" value={summary.fileName} /><MetricRow label="레코드" value={`${summary.recordCount.toLocaleString()}건`} /><MetricRow label="예외 행" value={`${summary.irregularRows.toLocaleString()}건`} /><MetricRow label="업로드 시각" value={formatDate(summary.importedAt)} /><div className="mt-4 flex flex-wrap gap-3"><button onClick={() => setView('import')} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white">마스터 업로드</button><button onClick={clearLocalMaster} className="rounded-2xl bg-[#edf4fb] px-5 py-3 font-semibold text-[#002542]">로컬 저장 삭제</button></div></> : <p className="text-sm text-[#5b6670]">업로드된 마스터가 없습니다.</p>}
+            {summary ? <><MetricRow label="파일명" value={summary.fileName} /><MetricRow label="레코드" value={`${summary.recordCount.toLocaleString()}건`} /><MetricRow label="예외 행" value={`${summary.irregularRows.toLocaleString()}건`} /><MetricRow label="업로드 시각" value={formatDate(summary.importedAt)} /><div className="mt-4 flex flex-wrap gap-3">{isAdmin && <button onClick={() => inputRef.current?.click()} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white">마스터 업로드</button>}<button onClick={clearLocalMaster} className="rounded-2xl bg-[#edf4fb] px-5 py-3 font-semibold text-[#002542]">로컬 저장 삭제</button></div></> : <p className="text-sm text-[#5b6670]">업로드된 마스터가 없습니다.</p>}
           </Panel>
           <Panel title="번들 마스터" icon={<BundleIcon className="h-5 w-5" />}>
             <input ref={bundleMasterInputRef} type="file" accept=".xlsx,.xls,.csv" className="hidden" onChange={async (event) => { const file = event.target.files?.[0]; if (!file) return; await uploadBundleMasterFile(file); event.target.value = ''; }} />
-            {bundleMasterSummary ? <><MetricRow label="파일명" value={bundleMasterSummary.fileName} /><MetricRow label="레코드" value={`${bundleMasterSummary.recordCount.toLocaleString()}건`} /><MetricRow label="업로드 시각" value={formatDate(bundleMasterSummary.importedAt)} /><div className="mt-4"><button onClick={() => bundleMasterInputRef.current?.click()} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white">번들 마스터 업로드</button></div></> : <><p className="text-sm text-[#5b6670]">번들 마스터가 아직 없습니다.</p><div className="mt-4"><button onClick={() => bundleMasterInputRef.current?.click()} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white">번들 마스터 업로드</button></div></>}
+            {bundleMasterSummary ? <><MetricRow label="파일명" value={bundleMasterSummary.fileName} /><MetricRow label="레코드" value={`${bundleMasterSummary.recordCount.toLocaleString()}건`} /><MetricRow label="업로드 시각" value={formatDate(bundleMasterSummary.importedAt)} /><BundleMasterUploadButton isAdmin={isAdmin} onChoose={() => bundleMasterInputRef.current?.click()} onOpenEditor={() => setView('editor')} /></> : <><p className="text-sm text-[#5b6670]">번들 마스터가 아직 없습니다.</p><BundleMasterUploadButton isAdmin={isAdmin} onChoose={() => bundleMasterInputRef.current?.click()} onOpenEditor={() => setView('editor')} /></>}
             {bundleMasterMessage && <p className="mt-4 whitespace-pre-line text-sm text-[#5b6670]">{bundleMasterMessage}</p>}
           </Panel>
           <Panel title="변환 현황" icon={<DescriptionIcon className="h-5 w-5" />}>
@@ -1067,8 +1089,82 @@ export default function KrsMasterApp() {
   );
 }
 
-function ImportPanel({ inputRef, uploading, uploadMessage, onChoose, onFile }: { inputRef: React.RefObject<HTMLInputElement | null>; uploading: boolean; uploadMessage: string | null; onChoose: () => void; onFile: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void> }) {
-  return <Panel title="상품 마스터 업로드" icon={<UploadIcon className="h-5 w-5" />}><input ref={inputRef} type="file" accept=".txt,.dat,.mst,.csv,text/plain,text/csv" className="hidden" onChange={onFile} /><button onClick={onChoose} className="flex min-h-[260px] w-full flex-col items-center justify-center rounded-[2rem] border-2 border-dashed border-[#9eb3c7] bg-[#f0f4f8] p-8"><UploadIcon className="mb-5 h-10 w-10 text-[#002542]" /><p className="text-xl font-bold">파일 선택</p><p className="mt-2 text-sm text-[#5b6670]">서버 DB와 브라우저 저장소를 함께 갱신합니다.</p></button>{(uploading || uploadMessage) && <div className="mt-5 rounded-[1.5rem] border border-[#efe4c8] bg-[#fffdf8] p-5 text-sm text-[#5b6670]">{uploading ? '파일 처리 중...' : uploadMessage}</div>}</Panel>;
+function ImportPanel({ isAdmin, onOpenEditor, inputRef, uploading, uploadMessage, onChoose, onFile }: { isAdmin: boolean | null; onOpenEditor: () => void; inputRef: React.RefObject<HTMLInputElement | null>; uploading: boolean; uploadMessage: string | null; onChoose: () => void; onFile: (event: React.ChangeEvent<HTMLInputElement>) => Promise<void> }) {
+  if (!isAdmin) {
+    return <Panel title="상품 마스터 업로드" icon={<UploadIcon className="h-5 w-5" />}><AdminOnlyNotice checking={isAdmin === null} what="현재 마스터 교체" onOpenEditor={onOpenEditor} /></Panel>;
+  }
+  return <Panel title="상품 마스터 업로드" icon={<UploadIcon className="h-5 w-5" />}><input ref={inputRef} type="file" accept=".txt,.dat,.mst,.csv,text/plain,text/csv" className="hidden" onChange={onFile} /><button onClick={onChoose} className="flex min-h-[260px] w-full flex-col items-center justify-center rounded-[2rem] border-2 border-dashed border-[#9eb3c7] bg-[#f0f4f8] p-8"><UploadIcon className="mb-5 h-10 w-10 text-[#002542]" /><p className="text-xl font-bold">파일 선택</p><p className="mt-2 text-sm text-[#5b6670]">서버 DB와 브라우저 저장소를 함께 갱신합니다. 모든 사용자의 현재 마스터가 바뀝니다.</p></button>{(uploading || uploadMessage) && <div className="mt-5 rounded-[1.5rem] border border-[#efe4c8] bg-[#fffdf8] p-5 text-sm text-[#5b6670]">{uploading ? '파일 처리 중...' : uploadMessage}</div>}</Panel>;
+}
+
+function AdminOnlyNotice({ checking, what, onOpenEditor }: { checking: boolean; what: string; onOpenEditor: () => void }) {
+  if (checking) return <p className="text-sm text-[#5b6670]">관리자 권한을 확인하고 있습니다…</p>;
+  return (
+    <div className="flex flex-col items-start gap-3 rounded-[1.5rem] border border-[#d6e0ea] bg-[#f6fafe] p-5 text-sm text-[#43474d]">
+      <div className="flex items-center gap-2 font-semibold text-[#002542]"><LockIcon className="h-4 w-4" />관리자 전용</div>
+      <p>{what}은(는) 모든 사용자에게 영향을 주므로 관리자만 할 수 있습니다. 마스터 편집 메뉴에서 비밀번호로 로그인하세요.</p>
+      <button onClick={onOpenEditor} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white">마스터 편집으로 이동</button>
+    </div>
+  );
+}
+
+function BundleMasterUploadButton({ isAdmin, onChoose, onOpenEditor }: { isAdmin: boolean | null; onChoose: () => void; onOpenEditor: () => void }) {
+  if (isAdmin) {
+    return <div className="mt-4"><button onClick={onChoose} className="rounded-2xl bg-[#002542] px-5 py-3 font-semibold text-white">번들 마스터 업로드</button></div>;
+  }
+  return <div className="mt-4"><AdminOnlyNotice checking={isAdmin === null} what="번들 마스터 교체" onOpenEditor={onOpenEditor} /></div>;
+}
+
+function MasterEditorPanel({ isAdmin, onLogin, onLogout }: { isAdmin: boolean | null; onLogin: (password: string) => Promise<void>; onLogout: () => Promise<void> }) {
+  const [password, setPassword] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  if (isAdmin === null) {
+    return <Panel title="마스터 편집" icon={<EditIcon className="h-5 w-5" />}><p className="text-sm text-[#5b6670]">관리자 권한을 확인하고 있습니다…</p></Panel>;
+  }
+
+  if (!isAdmin) {
+    const submit = async () => {
+      if (!password) return;
+      setBusy(true);
+      setError(null);
+      try {
+        await onLogin(password);
+        setPassword('');
+      } catch (exc) {
+        setError(exc instanceof Error ? exc.message : '로그인에 실패했습니다.');
+      } finally {
+        setBusy(false);
+      }
+    };
+    return (
+      <div className="mx-auto max-w-xl">
+        <Panel title="마스터 편집 (관리자)" icon={<LockIcon className="h-5 w-5" />}>
+          <p className="text-sm text-[#5b6670]">본사 마스터 감축, 팀장용·팀원용·PDA 출력, 상품 DB 관리, krs_gs25 통합 엑셀 저장을 하는 관리자 화면입니다. 로그인하면 업로드 메뉴의 현재 마스터·번들 마스터 교체도 함께 열립니다.</p>
+          <form className="mt-5 flex flex-col gap-3 sm:flex-row" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
+            <input type="password" value={password} onChange={(event) => setPassword(event.target.value)} placeholder="관리자 비밀번호" autoComplete="current-password" className="flex-1 rounded-2xl border border-[#d6e0ea] bg-white px-5 py-4 outline-none" />
+            <button type="submit" disabled={busy || !password} className="rounded-2xl bg-[#002542] px-6 py-4 font-semibold text-white disabled:opacity-60">{busy ? '확인 중…' : '로그인'}</button>
+          </form>
+          {error && <p className="mt-3 text-sm text-[#b04a34]">{error}</p>}
+        </Panel>
+      </div>
+    );
+  }
+
+  return (
+    <section className="space-y-3">
+      <div className="flex flex-wrap items-center gap-3 rounded-[1.5rem] bg-white/90 px-5 py-3 shadow-[0_8px_30px_rgba(0,37,66,0.06)]">
+        <EditIcon className="h-5 w-5 text-[#002542]" />
+        <h2 className="font-bold text-[#002542]">마스터 편집</h2>
+        <span className="text-xs text-[#5b6670] md:hidden">PC 화면에 맞춰져 있습니다. 휴대폰에서는 새 창으로 여는 것을 권장합니다.</span>
+        <div className="ml-auto flex gap-2">
+          <a href="/editor/" target="_blank" rel="noopener" className="rounded-xl bg-[#edf4fb] px-4 py-2 text-sm font-semibold text-[#002542]">새 창으로 열기</a>
+          <button onClick={() => void onLogout()} className="rounded-xl bg-[#edf4fb] px-4 py-2 text-sm font-semibold text-[#002542]">로그아웃</button>
+        </div>
+      </div>
+      <iframe title="마스터 편집" src="/editor/" className="h-[calc(100vh-15rem)] min-h-[560px] w-full rounded-[1.5rem] border border-[#d6e0ea] bg-white md:h-[calc(100vh-11rem)]" />
+    </section>
+  );
 }
 
 function SearchPanel({
@@ -1682,9 +1778,10 @@ function UpdateBanner({ state, onDismiss, onRefresh }: { state: UpdateBannerStat
   const message = state === 'updateReady'
     ? '새 버전이 준비되었습니다. 작성 중인 입력값은 유지되며 새로고침 후 최신 화면이 적용됩니다.'
     : '이 기기에서 오프라인 준비가 완료되었습니다.';
+  // 바깥 줄은 화면 폭 전체를 덮으므로 클릭을 통과시킨다(안 그러면 배너가 떠 있는 동안 상단 메뉴가 눌리지 않는다).
   return (
-    <div className="fixed inset-x-0 top-3 z-[60] flex justify-center px-4">
-      <div className="flex w-full max-w-xl items-center justify-between gap-3 rounded-[1.5rem] border border-[#cfe0f4] bg-white/95 px-4 py-3 shadow-[0_18px_40px_rgba(0,37,66,0.14)] backdrop-blur">
+    <div className="pointer-events-none fixed inset-x-0 top-3 z-[60] flex justify-center px-4">
+      <div className="pointer-events-auto flex w-full max-w-xl items-center justify-between gap-3 rounded-[1.5rem] border border-[#cfe0f4] bg-white/95 px-4 py-3 shadow-[0_18px_40px_rgba(0,37,66,0.14)] backdrop-blur">
         <p className="text-sm text-[#174f83]">{message}</p>
         <div className="flex items-center gap-2">
           {state === 'updateReady' && <button onClick={onRefresh} className="rounded-xl bg-[#002542] px-3 py-2 text-sm font-semibold text-white">지금 반영</button>}

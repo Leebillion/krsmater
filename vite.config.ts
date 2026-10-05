@@ -46,16 +46,19 @@ export default defineConfig(({ mode }) => {
         },
         workbox: {
           globPatterns: ['**/*.{js,css,html,png,svg,ico,json,woff2}'],
+          // 마스터 편집(/editor/)은 별도 서버의 페이지다. 서비스 워커가 이 앱의 index.html로
+          // 대신 응답하거나 편집 화면 파일을 캐시하면 안 된다.
+          navigateFallbackDenylist: [/^\/editor(\/|$)/, /^\/api\//],
           runtimeCaching: [
             {
-              urlPattern: ({ request }) => request.destination === 'document',
+              urlPattern: ({ request, url }) => request.destination === 'document' && !url.pathname.startsWith('/editor'),
               handler: 'NetworkFirst',
               options: {
                 cacheName: 'app-pages',
               },
             },
             {
-              urlPattern: ({ request }) => ['style', 'script', 'font', 'image'].includes(request.destination),
+              urlPattern: ({ request, url }) => ['style', 'script', 'font', 'image'].includes(request.destination) && !url.pathname.startsWith('/editor'),
               handler: 'StaleWhileRevalidate',
               options: {
                 cacheName: 'app-assets',
@@ -78,6 +81,12 @@ export default defineConfig(({ mode }) => {
         '/api': {
           target: env.VITE_API_TARGET || 'http://localhost:3100',
           changeOrigin: true,
+        },
+        // 마스터 편집 서버(editor/, Python). 운영에서는 nginx가 같은 일을 한다.
+        '/editor': {
+          target: env.VITE_EDITOR_TARGET || 'http://localhost:8000',
+          changeOrigin: true,
+          rewrite: (requestPath) => requestPath.replace(/^\/editor/, '') || '/',
         },
       },
       hmr: process.env.DISABLE_HMR !== 'true',

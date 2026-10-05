@@ -99,12 +99,25 @@ Reason:
 Actions:
 - confirm users find bundle master upload from `업로드` without guidance
 - verify the removed upload area from `번들 검색` does not create confusion
-- verify current master / bundle master / convert status cards are still visible where operators expect them
+- verify current master / bundle master / convert status cards are visible where operators expect them
 
 Expected result:
 - upload-related actions are easier to discover and less duplicated
 
-### 6. Clean mojibake in source and docs
+### 6. Validate shortName-missing row handling
+Reason:
+- rows without `shortName` are now valid rows instead of exception rows
+- master summary counts need confirmation on real files
+
+Actions:
+- re-upload real master files containing rows without short names
+- confirm `예외 행` no longer increases for those rows
+- confirm search and bundle-card highlighting still behave correctly
+
+Expected result:
+- summary counts better reflect intended business rules
+
+### 7. Clean mojibake in source and docs
 Reason:
 - several strings in code and markdown still show encoding damage
 - this creates maintenance and QA risk
@@ -118,7 +131,7 @@ Expected result:
 - source and docs are readable
 - labels are stable and maintainable
 
-### 7. Improve upload error reporting
+### 8. Improve upload error reporting
 Reason:
 - current failures can still look similar to end users
 - easier debugging is needed for operations
@@ -133,7 +146,7 @@ Expected result:
 
 ## Medium Priority
 
-### 8. Validate convert-tab real files
+### 9. Validate convert-tab real files
 Reason:
 - convert tab assumes headers `상품코드`, `상품명`
 - Excel source files may still contain numeric cells, spaces, or leading-zero edge cases
@@ -146,7 +159,7 @@ Actions:
 Expected result:
 - conversion works reliably with real operator files
 
-### 9. Expand parser for real-world file variants
+### 10. Expand parser for real-world file variants
 Reason:
 - field assumptions may differ by actual source files
 - `.dat`, `.mst`, `.csv` are selectable but parser is still fixed-width oriented first
@@ -160,7 +173,7 @@ Actions:
 Expected result:
 - import succeeds for actual production file variants
 
-### 10. Decide whether tap-to-focus or torch UI is needed
+### 11. Decide whether tap-to-focus or torch UI is needed
 Reason:
 - some Android devices may still need extra camera assistance beyond current constraints
 
@@ -172,7 +185,7 @@ Actions:
 Expected result:
 - more reliable scanning on difficult mobile hardware
 
-### 11. Harden PWA update UX
+### 12. Harden PWA update UX
 Reason:
 - service worker caching is now enabled
 - update and cache invalidation behavior should be verified in production
@@ -214,4 +227,6 @@ Before next release:
 - parser/matching logic is in `src/lib/master.ts`
 - server convert-save storage is in `server/db.js`
 - current convert save naming is globally unique across all saved sets
+- the latest local layout/parsing update is commit `e40eced`
+- if production still shows bundle-master upload inside `번들 검색`, production is serving an older build
 - real blocking issue for iPhone is still HTTPS/certificate first, scanner fallback second

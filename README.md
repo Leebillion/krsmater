@@ -14,3 +14,8 @@ Product master upload, search, QR/barcode scan, and similar-barcode matching web
    `npm install`
 2. Run the app:
    `npm run dev`
+
+## Master Editor (admin)
+Admin-only master reduction / output tool is merged as the `마스터 편집` menu (`editor/`, Python).
+Replacing the active master or bundle master now requires the admin password.
+See [MASTER_EDITOR.md](MASTER_EDITOR.md) for structure, deployment, and local development.

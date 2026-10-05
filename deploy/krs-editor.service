@@ -1,0 +1,21 @@
+# 마스터 편집 서버 systemd 서비스. 경로(/opt/mobile_master)와 사용자(www-data)는 서버에 맞게 바꾼다.
+#   sudo cp deploy/krs-editor.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now krs-editor
+[Unit]
+Description=KRS Master - 마스터 편집 (editor)
+After=network.target
+
+[Service]
+User=www-data
+WorkingDirectory=/opt/mobile_master/editor
+EnvironmentFile=/opt/mobile_master/editor/.env
+# 127.0.0.1에만 연다(바깥은 nginx /editor/). 작업 세션이 메모리에 있으므로 워커는 반드시 1개.
+ExecStart=/opt/mobile_master/editor/venv/bin/python -m uvicorn server.main:create_app --factory --host 127.0.0.1 --port 8000 --workers 1
+Restart=on-failure
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/krs-editor
+
+[Install]
+WantedBy=multi-user.target

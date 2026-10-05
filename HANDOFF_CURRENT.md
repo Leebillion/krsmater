@@ -25,8 +25,8 @@ KRS Master currently includes:
 ### 2. Search / Match Result
 - barcode search supports exact match and similar match ranking
 - text search supports product name and short name matching
-- records with empty `shortName` are now treated as bundle-style products for display only
-- bundle-style match cards now show an orange card background and a `번들` badge
+- records with empty `shortName` are treated as bundle-style products for display only
+- bundle-style match cards show an orange background and a `번들` badge
 
 ### 3. Upload Menu Layout
 - `현재 마스터`, `번들 마스터`, `변환 현황`, and `최근 업로드` cards are shown only in the `업로드` menu
@@ -46,14 +46,14 @@ KRS Master currently includes:
 - expected headers are `상품코드`, `상품명`
 - converted output renders barcode cards with preview
 - rows missing either code or name are skipped with warning messages
-- converted results can now be saved to server SQLite with an operator-defined name
+- converted results can be saved to server SQLite with an operator-defined name
 - saved convert results can be listed, reloaded, and deleted on later visits
 
 ### 6. Photo OCR Convert
 - photo OCR accepts mobile camera captures, gallery images, and scanned PDFs
 - OCR rows remain editable in the browser
 - OCR rows can still be temporarily saved per device in IndexedDB
-- OCR rows can now also be stored in server SQLite as named saved sets
+- OCR rows can also be stored in server SQLite as named saved sets
 - server upload filename normalization also applies to OCR image/PDF filenames
 
 ### 7. Bundle Menu
@@ -108,6 +108,11 @@ Confirmed locally:
 - existing DB will create convert save tables automatically on next server start
 - some PowerShell output may still look mojibake when printing Korean JSON directly, even if browser/app behavior is fine
 
+## Current Deployment State
+- latest local UI/layout change commit is `e40eced`
+- this includes upload-menu-only status cards and the shortName-row parsing change
+- if a deployed site still shows bundle-master upload inside `번들 검색`, it is serving an older build
+
 ## Recommended Next Checks
 1. verify actual Korean filename uploads from Windows/iPhone browsers across all upload panels
 2. verify saved convert result load/delete behavior with real operator data volumes
@@ -134,3 +139,10 @@ curl http://localhost:3100/api/health
 curl http://localhost:3100/api/convert/saved
 curl http://localhost:3100/api/bundles/report
 ```
+
+## Master Editor Merge (branch `feature/master-editor`, 2026-10-06)
+- New admin menu `마스터 편집`: the master reduction/output tool (Python FastAPI, `editor/`) runs at `/editor/` and is embedded in the app.
+- Replacing the active master or bundle master (`POST /api/master/import`, `POST /api/bundles/master/import`) now requires admin login (`server/adminAuth.js`). Viewing status stays public.
+- The editor can publish an output directly as the site's active master (server-to-server token `EDITOR_SHARED_TOKEN`).
+- Fixed: update/offline banner wrapper blocked clicks on the desktop header menu while shown.
+- Full details, deployment steps (nginx `/editor/`, systemd `krs-editor`), and verification: `MASTER_EDITOR.md`.

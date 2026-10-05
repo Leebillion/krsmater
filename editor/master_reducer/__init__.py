@@ -1,0 +1,2 @@
+"""Product master reducer application."""
+

@@ -32,7 +32,7 @@ Master file is treated as a fixed-width text file.
 - Encoding assumption: CP949 / EUC-KR family
 
 The parser currently tolerates irregular-width rows and counts them as exceptions.
-Rows that stop after `barcode + name` are now also treated as valid rows, so missing `shortName` does not increase `irregularRows`.
+Rows that stop after `barcode + name` are also treated as valid rows, so missing `shortName` does not increase `irregularRows`.
 
 ## Current Architecture
 
@@ -196,6 +196,10 @@ Even with fallback scanning, `navigator.mediaDevices.getUserMedia` can be blocke
 - installed app update behavior should be verified on real deployments
 - real-world validation is still needed for larger saved convert result sets
 
+## Current Deployment Note
+- local latest layout/parsing change is commit `e40eced`
+- if production still shows bundle master upload inside `번들 검색`, production is serving an older build than `e40eced`
+
 ## Current Nginx/Deployment Assumption
 The service is deployed behind nginx.
 
@@ -225,3 +229,9 @@ Production artifact:
 - local draft restore after refresh
 - photo OCR temporary device save
 - convert saved-set server save / load / delete
+
+## Admin / Master Editor (2026-10-06, branch `feature/master-editor`)
+- General users: scanner, search, bundle report/lookup, convert/OCR, upload-menu status (read only).
+- Admin (shared password, checked by the editor service): `마스터 편집` menu, active master replace, bundle master replace, publish editor output as active master.
+- Services: nginx `/` → `dist/`, `/api/` → Express :3100, `/editor/` → FastAPI :8000 (`editor/`).
+- See `MASTER_EDITOR.md`.

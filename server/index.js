@@ -27,6 +27,7 @@ import {
   updateBundleReport,
 } from './db.js';
 import { findBarcodeMatches, parseMasterBuffer } from './masterParser.js';
+import { isAdminRequest, requireAdmin } from './adminAuth.js';
 import { assertPythonCommand, findPythonCandidatesFromWhere, formatPythonAttempt } from './pythonResolver.js';
 
 const app = express();
@@ -40,6 +41,14 @@ app.use(express.json({ limit: '1mb' }));
 
 app.get('/api/health', (_req, res) => {
   res.json({ ok: true, service: 'KRS Master API' });
+});
+
+app.get('/api/admin/status', async (req, res, next) => {
+  try {
+    res.json({ admin: await isAdminRequest(req) });
+  } catch (error) {
+    next(error);
+  }
 });
 
 app.get('/api/master/status', async (_req, res, next) => {
@@ -61,7 +70,8 @@ app.get('/api/master/full', async (_req, res, next) => {
   }
 });
 
-app.post('/api/master/import', upload.single('masterFile'), async (req, res, next) => {
+// 현재 마스터·번들 마스터 교체는 모든 사용자에게 영향을 주므로 관리자(마스터 편집 로그인)만 할 수 있다.
+app.post('/api/master/import', requireAdmin, upload.single('masterFile'), async (req, res, next) => {
   try {
     if (!req.file) {
       res.status(400).json({ error: 'masterFile is required' });
@@ -201,7 +211,7 @@ app.get('/api/bundles/master/status', async (_req, res, next) => {
   }
 });
 
-app.post('/api/bundles/master/import', upload.single('bundleFile'), async (req, res, next) => {
+app.post('/api/bundles/master/import', requireAdmin, upload.single('bundleFile'), async (req, res, next) => {
   try {
     if (!req.file) {
       res.status(400).json({ error: 'bundleFile is required' });

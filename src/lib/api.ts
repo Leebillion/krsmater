@@ -311,6 +311,42 @@ export async function deleteSavedConvertSet(id: number) {
   return response.json() as Promise<{ ok: true }>;
 }
 
+// ---- 마스터 편집(관리자) ------------------------------------------------------
+// 로그인은 마스터 편집 서버(/editor/)가 맡는다. 로그인하면 그 쿠키로 이 사이트의
+// 관리자 기능(현재 마스터·번들 마스터 업로드)도 열린다.
+const EDITOR_HEADERS = { 'X-Requested-With': 'master-reducer' };
+
+export async function fetchAdminStatus() {
+  try {
+    const response = await fetch('/api/admin/status', { credentials: 'same-origin' });
+    if (!response.ok) return false;
+    const payload = (await response.json()) as { admin?: boolean };
+    return Boolean(payload.admin);
+  } catch {
+    return false;
+  }
+}
+
+export async function adminLogin(password: string) {
+  const response = await fetch('/editor/api/login', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: { 'Content-Type': 'application/json', ...EDITOR_HEADERS },
+    body: JSON.stringify({ password }),
+  });
+  if (!response.ok) {
+    const payload = await safeJson(response);
+    if (response.status === 502 || response.status === 504 || response.status === 404) {
+      throw new Error('마스터 편집 서버에 연결하지 못했습니다. 서버가 실행 중인지 확인하세요.');
+    }
+    throw new Error(payload?.message ?? '로그인에 실패했습니다.');
+  }
+}
+
+export async function adminLogout() {
+  await fetch('/editor/api/logout', { method: 'POST', credentials: 'same-origin', headers: EDITOR_HEADERS }).catch(() => undefined);
+}
+
 async function safeJson(response: Response) {
   try {
     return await response.json();
