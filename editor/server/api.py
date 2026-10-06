@@ -95,6 +95,7 @@ from master_reducer.workspace import (
 )
 
 from .auth import Auth
+from .dbsync import DbSyncError, replace_shared_db
 from .publish import PublishError, publish_master
 from .state import AppState, ImportPreview, SessionState, WorkbookPreview
 
@@ -787,6 +788,39 @@ def build_router(state: AppState, auth: Auth) -> APIRouter:
             return {"ok": True, "message": "통합 엑셀 교체: " + " · ".join(saved), "lines": saved}
 
         return guarded(request, action)
+
+    # ---------------------------------------------------- shared DB sync
+
+    @router.post("/db/replace")
+    async def replace_db(request: Request, file: UploadFile = File(...)):
+        """PC 앱의 master_management.db로 공유 상품 DB 전체를 교체한다(기존 DB는 자동 백업)."""
+        session = await run_in_threadpool(session_only, request)
+        path, original = await save_upload(session, file, "dbsync")
+
+        def action(s: SessionState):
+            try:
+                result = replace_shared_db(state.con, path, settings.data_dir / "backups")
+            except DbSyncError as exc:
+                raise HTTPException(400, str(exc)) from exc
+            finally:
+                path.unlink(missing_ok=True)
+            # 모든 세션이 다음 요청에서 새 DB를 다시 읽는다.
+            state.bump()
+            s.changed()
+            changes = [
+                f"{label} {before:,} → {result['after'][label]:,}" if before is not None else f"{label} 없음 → {result['after'][label]:,}"
+                for label, before in result["before"].items()
+                if result["after"].get(label) is not None
+            ]
+            return {
+                "ok": True,
+                "message": f"DB 업데이트 완료 ({original}): " + ", ".join(changes),
+                "before": result["before"],
+                "after": result["after"],
+                "backup": result["backup"],
+            }
+
+        return await run_in_threadpool(guarded, request, action)
 
     # ------------------------------------------------------------ presets
 

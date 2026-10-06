@@ -343,6 +343,33 @@ export async function adminLogin(password: string) {
   }
 }
 
+export type EditorDbReplaceResult = {
+  ok: true;
+  message: string;
+  before: Record<string, number | null>;
+  after: Record<string, number | null>;
+  backup: string;
+};
+
+// PC 앱의 master_management.db로 마스터 편집 서버의 공유 상품 DB를 교체한다(서버가 기존 DB를 자동 백업).
+export async function uploadEditorDb(file: File) {
+  const formData = new FormData();
+  formData.append('file', file);
+  const response = await fetch('/editor/api/db/replace', {
+    method: 'POST',
+    credentials: 'same-origin',
+    headers: EDITOR_HEADERS,
+    body: formData,
+  });
+  if (!response.ok) {
+    const payload = await safeJson(response);
+    if (response.status === 401) throw new Error('로그인이 만료되었습니다. 다시 로그인하세요.');
+    if (response.status === 413) throw new Error('파일이 너무 큽니다.');
+    throw new Error(payload?.message ?? `DB 업데이트에 실패했습니다 (${response.status}).`);
+  }
+  return (await response.json()) as EditorDbReplaceResult;
+}
+
 export async function adminLogout() {
   await fetch('/editor/api/logout', { method: 'POST', credentials: 'same-origin', headers: EDITOR_HEADERS }).catch(() => undefined);
 }

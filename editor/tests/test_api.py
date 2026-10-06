@@ -265,3 +265,55 @@ def test_publish_failure_keeps_the_download(tmp_path, fake_site):
 def test_publish_is_off_without_configuration(app):
     client = login(app)
     assert client.get("/api/outputs/options").json()["publish_enabled"] is False
+
+
+def make_pc_db(path: Path, paid_rows: list[bytes]) -> Path:
+    import sqlite3
+
+    from master_reducer.db import ensure_schema, save_source_lines
+
+    con = sqlite3.connect(path)
+    con.execute("pragma journal_mode=wal")  # PC 앱 DB와 같은 WAL 모드
+    ensure_schema(con)
+    save_source_lines(con, "paid", paid_rows)
+    con.close()
+    return path
+
+
+def test_db_replace_swaps_shared_db_for_everyone(app, tmp_path):
+    admin = login(app)
+    other = login(app)
+    assert other.get("/api/rows/paid").json()["total"] == 0
+    pc_db = make_pc_db(tmp_path / "pc.db", [compose_fixed_width_row("2800000000001", "종량제봉투", "봉투")])
+
+    result = admin.post(
+        "/api/db/replace",
+        files={"file": ("master_management.db", pc_db.read_bytes())},
+        headers=HEADERS,
+    ).json()
+
+    assert result["ok"], result
+    assert result["before"]["종량제"] == 0 and result["after"]["종량제"] == 1
+    backups = list((app.state.app_state.settings.data_dir / "backups").glob("master_management_*.db"))
+    assert [b.name for b in backups] == [result["backup"]]
+    # 다른 접속자도 바로 새 DB를 본다.
+    assert other.get("/api/rows/paid").json()["total"] == 1
+
+
+def test_db_replace_rejects_non_db_files(app, tmp_path):
+    import sqlite3
+
+    client = login(app)
+    not_db = client.post("/api/db/replace", files={"file": ("x.db", b"hello")}, headers=HEADERS)
+    assert not_db.status_code == 400 and "SQLite" in not_db.json()["message"]
+
+    other_db = tmp_path / "other.db"
+    con = sqlite3.connect(other_db)
+    con.execute("create table something (id integer)")
+    con.commit()
+    con.close()
+    wrong = client.post("/api/db/replace", files={"file": ("other.db", other_db.read_bytes())}, headers=HEADERS)
+    assert wrong.status_code == 400 and "상품 DB가 아닙니다" in wrong.json()["message"]
+
+    no_csrf = client.post("/api/db/replace", files={"file": ("x.db", b"hello")})
+    assert no_csrf.status_code == 403

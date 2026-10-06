@@ -6,6 +6,7 @@ import {
   adminLogin,
   adminLogout,
   fetchAdminStatus,
+  uploadEditorDb,
   createBundleReport,
   deleteSavedConvertSet,
   deleteBundleReport,
@@ -1118,6 +1119,26 @@ function MasterEditorPanel({ isAdmin, onLogin, onLogout }: { isAdmin: boolean | 
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const dbInputRef = useRef<HTMLInputElement | null>(null);
+  const [dbBusy, setDbBusy] = useState(false);
+  const [dbMessage, setDbMessage] = useState<{ text: string; error: boolean } | null>(null);
+  // DB를 바꾼 뒤 편집 화면을 새로 띄워 바뀐 상품 DB가 바로 보이게 한다.
+  const [frameKey, setFrameKey] = useState(0);
+
+  const replaceDb = async (file: File) => {
+    if (!window.confirm(`서버의 상품 DB(종량제·번들·단축·서비스·담배·삭제한 행·검색어)를\n'${file.name}' 내용으로 모두 교체합니다.\n기존 서버 DB는 자동으로 백업됩니다.\n\nPC 앱을 닫은 뒤 올린 파일인지 확인하세요. 계속할까요?`)) return;
+    setDbBusy(true);
+    setDbMessage({ text: 'DB를 올리고 있습니다…', error: false });
+    try {
+      const result = await uploadEditorDb(file);
+      setDbMessage({ text: `${result.message} · 백업: ${result.backup}`, error: false });
+      setFrameKey((key) => key + 1);
+    } catch (exc) {
+      setDbMessage({ text: exc instanceof Error ? exc.message : 'DB 업데이트에 실패했습니다.', error: true });
+    } finally {
+      setDbBusy(false);
+    }
+  };
 
   if (isAdmin === null) {
     return <Panel title="마스터 편집" icon={<EditIcon className="h-5 w-5" />}><p className="text-sm text-[#5b6670]">관리자 권한을 확인하고 있습니다…</p></Panel>;
@@ -1158,11 +1179,14 @@ function MasterEditorPanel({ isAdmin, onLogin, onLogout }: { isAdmin: boolean | 
         <h2 className="font-bold text-[#002542]">마스터 편집</h2>
         <span className="text-xs text-[#5b6670] md:hidden">PC 화면에 맞춰져 있습니다. 휴대폰에서는 새 창으로 여는 것을 권장합니다.</span>
         <div className="ml-auto flex gap-2">
+          <input ref={dbInputRef} type="file" accept=".db,.sqlite,.sqlite3" className="hidden" onChange={(event) => { const file = event.target.files?.[0]; event.target.value = ''; if (file) void replaceDb(file); }} />
+          <button onClick={() => dbInputRef.current?.click()} disabled={dbBusy} title="PC 앱의 master_management.db를 올려 서버 상품 DB를 교체합니다" className="rounded-xl bg-[#002542] px-4 py-2 text-sm font-semibold text-white disabled:opacity-60">{dbBusy ? 'DB 올리는 중…' : 'DB 업데이트'}</button>
           <a href="/editor/" target="_blank" rel="noopener" className="rounded-xl bg-[#edf4fb] px-4 py-2 text-sm font-semibold text-[#002542]">새 창으로 열기</a>
           <button onClick={() => void onLogout()} className="rounded-xl bg-[#edf4fb] px-4 py-2 text-sm font-semibold text-[#002542]">로그아웃</button>
         </div>
+        {dbMessage && <p className={`w-full text-sm ${dbMessage.error ? 'text-[#b04a34]' : 'text-[#2f6b3a]'}`}>{dbMessage.text}</p>}
       </div>
-      <iframe title="마스터 편집" src="/editor/" className="h-[calc(100vh-15rem)] min-h-[560px] w-full rounded-[1.5rem] border border-[#d6e0ea] bg-white md:h-[calc(100vh-11rem)]" />
+      <iframe key={frameKey} title="마스터 편집" src="/editor/" className="h-[calc(100vh-15rem)] min-h-[560px] w-full rounded-[1.5rem] border border-[#d6e0ea] bg-white md:h-[calc(100vh-11rem)]" />
     </section>
   );
 }
