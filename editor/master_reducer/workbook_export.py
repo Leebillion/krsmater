@@ -77,6 +77,12 @@ class WorkbookExportResult:
     row_counts: dict[str, int]
     padded_counts: dict[str, int]
     dropped_counts: dict[str, int]
+    # Sheets taken from a template instead of this save's outputs / the DB.
+    template_sheets: tuple[str, ...] = ()
+
+
+class WorkbookDataMissing(ValueError):
+    """The DB (and template, if any) cannot supply every sheet krs_gs25 requires."""
 
 
 def row_cell_text(raw_line: bytes) -> str:
@@ -211,4 +217,108 @@ def write_integrated_workbook(
         row_counts={name: len(sheet.rows) for name, sheet in prepared.items()},
         padded_counts={name: sheet.padded for name, sheet in prepared.items() if sheet.padded},
         dropped_counts={name: sheet.dropped for name, sheet in prepared.items() if sheet.dropped},
+    )
+
+
+# --------------------------------------------------------------------------------
+# DB로 만들기 (템플릿 불필요)
+
+BUNDLE_SHEET_HEADER = ("번들바코드", "번들상품명", "입수", "상품코드", "상품명", "중분류")
+FUNCTION_SHEET_HEADER = ("번들바코드", "번들상품명", "입수", "상품코드", "상품명", "에디터 복사용")
+OUTPUT_SHEETS = (SHEET_ALL, SHEET_LEADER, SHEET_MEMBER, SHEET_CLOSED)
+
+
+def _template_values(template_path: Path, sheet_name: str) -> list[tuple]:
+    from openpyxl import load_workbook
+
+    workbook = load_workbook(template_path, read_only=True, data_only=True)
+    try:
+        if sheet_name not in workbook.sheetnames:
+            return []
+        return [tuple(row) for row in workbook[sheet_name].iter_rows(values_only=True)]
+    finally:
+        workbook.close()
+
+
+def build_integrated_workbook(
+    output_path: str | Path,
+    *,
+    sheet_lines: dict[str, list[bytes]],
+    bundle_rows: list[tuple[str, str, str, str, str, str]],
+    store_rows: list[tuple[str, str]],
+    paid_lines: list[bytes],
+    service_lines: list[bytes],
+    template_path: str | Path | None = None,
+) -> WorkbookExportResult:
+    """Build the nine-sheet krs_gs25 workbook from the DB, without a template.
+
+    - 번들 / 점포코드: the sheets kept from the last 통합 엑셀 가져오기 (workbook_bundle_row,
+      store_code), because the product tables lack 중분류 and the store list.
+    - 종량제 / 서비스: the product DBs' fixed-width rows, one per cell in column A.
+    - 팀장 / 팀원 / 전체 / 폐점: this save's outputs. An output not saved this time is
+      taken from the template if one is given; otherwise the workbook cannot be made
+      (krs_gs25 rejects a workbook with an empty sheet).
+    - 함수저장: the template's if given, else just its header (krs_gs25 only checks it exists).
+    """
+    from openpyxl import Workbook
+
+    template = Path(template_path) if template_path else None
+    missing: list[str] = []
+    if not bundle_rows:
+        missing.append("번들(통합 엑셀 가져오기를 한 번 실행하세요)")
+    if not store_rows:
+        missing.append("점포코드(통합 엑셀 가져오기를 한 번 실행하세요)")
+    if not paid_lines:
+        missing.append("종량제 DB")
+    template_sheets = [name for name in OUTPUT_SHEETS if name not in sheet_lines]
+    if template_sheets and template is None:
+        labels = {SHEET_ALL: "전체(Full 마스터)", SHEET_CLOSED: "폐점(폐점 마스터)", SHEET_LEADER: "팀장(팀장용)", SHEET_MEMBER: "팀원(팀원용)"}
+        missing.append("이번에 저장하지 않은 출력: " + ", ".join(labels[name] for name in template_sheets))
+    if missing:
+        raise WorkbookDataMissing("통합 엑셀에 필요한 내용이 없습니다 — " + "; ".join(missing))
+
+    prepared = {name: prepare_sheet_rows(lines) for name, lines in sheet_lines.items()}
+    workbook = Workbook(write_only=True)
+    for name in INTEGRATED_REQUIRED_SHEETS:
+        sheet = workbook.create_sheet(name)
+        if name == "번들":
+            sheet.append(list(BUNDLE_SHEET_HEADER))
+            for barcode, bundle_name, quantity, unit_barcode, unit_name, category in bundle_rows:
+                sheet.append([barcode, bundle_name, int(quantity) if quantity.isdigit() else quantity,
+                              unit_barcode, unit_name, category])
+        elif name == "종량제":
+            # krs_gs25는 종량제 시트를 2행부터 읽는다(1행을 머리글로 본다). 머리글 없이 쓰면
+            # 첫 종량제 행이 빠지므로 머리글을 둔다(이 앱의 가져오기는 바코드가 아닌 행을 건너뛴다).
+            sheet.append(["종량제 원본마스터"])
+            for raw in paid_lines:
+                sheet.append([row_cell_text(raw)])
+        elif name == "서비스":
+            for raw in service_lines:
+                sheet.append([row_cell_text(raw)])
+        elif name == "점포코드":
+            sheet.append(["현재점포코드", "점포명"])
+            for code, store_name in store_rows:
+                sheet.append([code, store_name])
+        elif name == "함수저장":
+            rows = _template_values(template, name) if template else []
+            for row in rows or [FUNCTION_SHEET_HEADER]:
+                sheet.append(list(row))
+        elif name in prepared:
+            for raw in prepared[name].rows:
+                sheet.append([row_cell_text(raw)])
+        else:  # 출력을 저장하지 않은 시트 -> 템플릿 값
+            for row in _template_values(template, name):
+                if row and row[0] is not None:
+                    sheet.append([row[0]])
+
+    output = Path(output_path)
+    temp_path = output.with_name(output.name + ".tmp")
+    workbook.save(temp_path)
+    temp_path.replace(output)
+    return WorkbookExportResult(
+        path=output,
+        row_counts={name: len(sheet.rows) for name, sheet in prepared.items()},
+        padded_counts={name: sheet.padded for name, sheet in prepared.items() if sheet.padded},
+        dropped_counts={name: sheet.dropped for name, sheet in prepared.items() if sheet.dropped},
+        template_sheets=tuple(template_sheets),
     )

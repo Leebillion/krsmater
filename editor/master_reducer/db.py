@@ -182,6 +182,29 @@ def ensure_schema(con: sqlite3.Connection) -> None:
         )
         """
     )
+    # 통합 엑셀을 DB만으로 다시 만들 때 필요한 원본(가져오기 때 보관). 상품 DB 표에는
+    # 번들 시트의 중분류·단축 행 단품 정보와 점포코드가 없어서 따로 둔다.
+    con.execute(
+        """
+        create table if not exists store_code (
+            store_code text primary key,
+            store_name text not null
+        )
+        """
+    )
+    con.execute(
+        """
+        create table if not exists workbook_bundle_row (
+            row_no integer primary key,
+            bundle_barcode text not null,
+            bundle_name text not null,
+            quantity text,
+            unit_barcode text,
+            unit_name text,
+            category text
+        )
+        """
+    )
     con.commit()
     seed_search_presets(con)
 
@@ -1070,6 +1093,100 @@ def apply_workbook_target(con: sqlite3.Connection, target: WorkbookTarget) -> in
     if target.target_key == SOURCE_BUNDLE:
         return save_bundle_rows(con, target.rows)
     return save_source_lines(con, target.target_key, [row.raw_line for row in target.rows])
+
+
+STORE_SHEET_NAME = "점포코드"
+BUNDLE_SHEET_COLUMNS = ("bundle_barcode", "bundle_name", "quantity", "unit_barcode", "unit_name", "category")
+
+
+@dataclass(frozen=True)
+class WorkbookExtras:
+    """Sheets the product DB tables cannot rebuild, kept so the 통합 엑셀 needs no template.
+
+    bundle_rows: the 번들 sheet as is (중분류 and 단축 rows' 입수·상품코드 included).
+    store_rows: the 점포코드 sheet (krs_gs25 wipes and rewrites its store list from it).
+    """
+
+    bundle_rows: list[tuple[str, str, str, str, str, str]]
+    store_rows: list[tuple[str, str]]
+
+
+def read_workbook_extras(path: str | Path) -> WorkbookExtras:
+    workbook = load_workbook(filename=io.BytesIO(Path(path).read_bytes()), read_only=True, data_only=True)
+    bundle_rows: list[tuple[str, str, str, str, str, str]] = []
+    store_rows: list[tuple[str, str]] = []
+    try:
+        bundle_sheet, _paid_sheet, _service_sheet = pick_workbook_sheets(workbook)
+        if bundle_sheet is not None:
+            rows = bundle_sheet.iter_rows(values_only=True)
+            header = next(rows, ())
+            columns = {
+                BUNDLE_HEADER_KEYS[cell_text(value)]: index
+                for index, value in enumerate(header)
+                if cell_text(value) in BUNDLE_HEADER_KEYS
+            }
+            if "bundle_barcode" in columns and "bundle_name" in columns:
+                for row in rows:
+                    values = tuple(
+                        cell_text(row[columns[key]]) if key in columns and columns[key] < len(row) else ""
+                        for key in BUNDLE_SHEET_COLUMNS
+                    )
+                    if values[0] and values[1]:
+                        bundle_rows.append(values)
+        store_sheet = next((s for s in workbook.worksheets if s.title.strip() == STORE_SHEET_NAME), None)
+        if store_sheet is not None:
+            for row in store_sheet.iter_rows(min_row=2, values_only=True):
+                code = cell_text(row[0]) if row else ""
+                name = cell_text(row[1]) if row and len(row) > 1 else ""
+                if code and name:
+                    store_rows.append((code, name))
+    finally:
+        workbook.close()
+    return WorkbookExtras(bundle_rows=bundle_rows, store_rows=store_rows)
+
+
+def save_workbook_extras(con: sqlite3.Connection, extras: WorkbookExtras, include_bundle: bool = True) -> dict[str, int]:
+    """Replace the kept 번들 sheet rows / 점포코드 with the imported workbook's.
+
+    The 번들 sheet rows follow the 번들 DB: they are only replaced when that DB was replaced
+    in the same import, so the two never describe different workbooks.
+    """
+    saved: dict[str, int] = {}
+    if include_bundle and extras.bundle_rows:
+        con.execute("delete from workbook_bundle_row")
+        con.executemany(
+            """
+            insert into workbook_bundle_row
+                (row_no, bundle_barcode, bundle_name, quantity, unit_barcode, unit_name, category)
+            values (?, ?, ?, ?, ?, ?, ?)
+            """,
+            [(index, *row) for index, row in enumerate(extras.bundle_rows, start=1)],
+        )
+        saved["bundle_rows"] = len(extras.bundle_rows)
+    if extras.store_rows:
+        con.execute("delete from store_code")
+        con.executemany(
+            "insert or replace into store_code (store_code, store_name) values (?, ?)", extras.store_rows
+        )
+        saved["store_rows"] = len(extras.store_rows)
+    con.commit()
+    return saved
+
+
+def fetch_workbook_bundle_rows(con: sqlite3.Connection) -> list[tuple[str, str, str, str, str, str]]:
+    return [
+        tuple(str(value or "") for value in row)
+        for row in con.execute(
+            """
+            select bundle_barcode, bundle_name, quantity, unit_barcode, unit_name, category
+            from workbook_bundle_row order by row_no
+            """
+        )
+    ]
+
+
+def fetch_store_codes(con: sqlite3.Connection) -> list[tuple[str, str]]:
+    return [(str(code), str(name)) for code, name in con.execute("select store_code, store_name from store_code order by rowid")]
 
 
 def workbook_target_counts(con: sqlite3.Connection, target: WorkbookTarget) -> int:

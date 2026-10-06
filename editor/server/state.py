@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from master_reducer.core import MasterLine
-from master_reducer.db import WorkbookTarget, ensure_schema
+from master_reducer.db import WorkbookExtras, WorkbookTarget, ensure_schema
 from master_reducer.workspace import WorkSession
 
 from .settings import Settings
@@ -36,6 +36,8 @@ class WorkbookPreview:
     file_name: str
     targets: list[WorkbookTarget]
     current_counts: dict[str, int]
+    # 번들 시트 원본·점포코드: 통합 엑셀을 템플릿 없이 DB로 만들 때 쓰려고 함께 보관한다.
+    extras: WorkbookExtras | None = None
 
 
 @dataclass

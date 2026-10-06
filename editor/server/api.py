@@ -50,8 +50,13 @@ from master_reducer.db import (
     import_bundle_master,
     import_category_master_excel,
     import_paid_master,
+    fetch_source_lines,
+    fetch_store_codes,
+    fetch_workbook_bundle_rows,
     product_source,
     read_bundle_workbook,
+    read_workbook_extras,
+    save_workbook_extras,
     read_import_candidate_lines,
     read_meta,
     reorder_search_presets,
@@ -76,7 +81,12 @@ from master_reducer.outputs import (
     group_label,
     output_raw_lines,
 )
-from master_reducer.workbook_export import SHEET_BY_OUTPUT, missing_template_sheets, write_integrated_workbook
+from master_reducer.workbook_export import (
+    SHEET_BY_OUTPUT,
+    WorkbookDataMissing,
+    build_integrated_workbook,
+    missing_template_sheets,
+)
 from master_reducer.workspace import (
     FILE_SLOTS,
     KIND_DB,
@@ -715,6 +725,7 @@ def build_router(state: AppState, auth: Auth) -> APIRouter:
         def action(s: SessionState):
             try:
                 targets = read_bundle_workbook(path)
+                extras = read_workbook_extras(path)
             except Exception as exc:  # noqa: BLE001
                 raise HTTPException(400, f"통합 엑셀 오류: {exc}") from exc
             finally:
@@ -726,7 +737,7 @@ def build_router(state: AppState, auth: Auth) -> APIRouter:
                     "필요하고, '종량제' 시트는 A열에 완성된 고정폭 행이 있어야 합니다.",
                 )
             counts = {target.key: workbook_target_counts(s.work.con, target) for target in targets}
-            s.workbook_preview = WorkbookPreview(original, targets, counts)
+            s.workbook_preview = WorkbookPreview(original, targets, counts, extras)
             return {
                 "file_name": original,
                 "targets": [
@@ -781,6 +792,14 @@ def build_router(state: AppState, auth: Auth) -> APIRouter:
             for target in selected:
                 count = apply_workbook_target(s.work.con, target)
                 saved.append(f"{target.label} {preview.current_counts.get(target.key, 0):,} → {count:,}행")
+            if preview.extras is not None:
+                kept = save_workbook_extras(
+                    s.work.con, preview.extras, include_bundle=any(t.key == "bundle" for t in selected)
+                )
+                if kept.get("bundle_rows"):
+                    saved.append(f"번들 시트 원본 {kept['bundle_rows']:,}행 보관")
+                if kept.get("store_rows"):
+                    saved.append(f"점포코드 {kept['store_rows']:,}건 보관")
             s.workbook_preview = None
             s.work.reload_shared()
             state.bump()
@@ -895,6 +914,11 @@ def build_router(state: AppState, auth: Auth) -> APIRouter:
                 "workbook_filename": default_workbook_filename(prefix),
                 "template": template_name,
                 "publish_enabled": settings.publish_enabled,
+                # 템플릿 없이 DB로 만들 수 있는지(번들 시트 원본·점포코드를 가져오기 때 보관했는지)
+                "workbook_db": {
+                    "bundle_rows": len(fetch_workbook_bundle_rows(s.work.con)),
+                    "store_rows": len(fetch_store_codes(s.work.con)),
+                },
                 "sheet_pairs": [[OUTPUT_SPEC_BY_KEY[k].label, sheet] for k, sheet in SHEET_BY_OUTPUT.items()],
                 "sources": [[key, source.label] for key, source in PRODUCT_SOURCES.items()],
                 "outputs": [
@@ -990,30 +1014,37 @@ def build_router(state: AppState, auth: Auth) -> APIRouter:
                 summaries.append(f"{spec.label}: {rows.total:,}행 = {summary_line(context, spec, rows)}  → {name}")
 
             if body.workbook:
-                if not settings.template_path.exists():
-                    return {"ok": False, "message": "통합 엑셀 템플릿을 먼저 올려 주세요."}
                 sheet_lines = {
                     SHEET_BY_OUTPUT[spec.key]: output_raw_lines(rows)
                     for _item, spec, rows in composed
                     if spec.key in SHEET_BY_OUTPUT
                 }
-                if not sheet_lines:
-                    labels = ", ".join(OUTPUT_SPEC_BY_KEY[k].label for k in SHEET_BY_OUTPUT)
-                    return {"ok": False, "message": f"통합 엑셀에 들어갈 출력({labels}) 중 하나 이상을 선택하세요."}
                 workbook_name = safe_filename(body.workbook_filename, default_workbook_filename(body.prefix))
                 if not workbook_name.lower().endswith(".xlsx"):
                     workbook_name += ".xlsx"
-                exported = write_integrated_workbook(settings.template_path, out_dir / workbook_name, sheet_lines)
-                kept = [sheet for sheet in SHEET_BY_OUTPUT.values() if sheet not in sheet_lines]
-                counts = " / ".join(f"{name} {count:,}행" for name, count in exported.row_counts.items())
-                line = f"통합 엑셀: {counts}"
-                if kept:
-                    line += f", {'·'.join(kept)} 시트는 템플릿 그대로"
-                summaries.append(f"{line}  → {workbook_name}")
-                for sheet, count in exported.padded_counts.items():
-                    summaries.append(f"  · {sheet}: 57byte 미만 행 {count:,}개를 고정폭으로 맞춤")
-                for sheet, count in exported.dropped_counts.items():
-                    summaries.append(f"  · {sheet}: 상품명 없는 행 {count:,}개 제외 (krs_gs25가 읽을 수 없음)")
+                try:
+                    exported = build_integrated_workbook(
+                        out_dir / workbook_name,
+                        sheet_lines=sheet_lines,
+                        bundle_rows=fetch_workbook_bundle_rows(s.work.con),
+                        store_rows=fetch_store_codes(s.work.con),
+                        paid_lines=fetch_source_lines(s.work.con, "paid"),
+                        service_lines=fetch_source_lines(s.work.con, "service"),
+                        template_path=settings.template_path if settings.template_path.exists() else None,
+                    )
+                except WorkbookDataMissing as exc:
+                    # txt 저장은 그대로 두고, 엑셀만 못 만든 이유를 알린다.
+                    summaries.append(f"통합 엑셀 저장 안 됨: {exc}")
+                else:
+                    counts = " / ".join(f"{name} {count:,}행" for name, count in exported.row_counts.items())
+                    line = f"통합 엑셀(DB로 만듦): {counts}"
+                    if exported.template_sheets:
+                        line += f", {'·'.join(exported.template_sheets)} 시트는 템플릿에서"
+                    summaries.append(f"{line}  → {workbook_name}")
+                    for sheet, count in exported.padded_counts.items():
+                        summaries.append(f"  · {sheet}: 57byte 미만 행 {count:,}개를 고정폭으로 맞춤")
+                    for sheet, count in exported.dropped_counts.items():
+                        summaries.append(f"  · {sheet}: 상품명 없는 행 {count:,}개 제외 (krs_gs25가 읽을 수 없음)")
 
             published = None
             if body.publish:

@@ -317,3 +317,50 @@ def test_db_replace_rejects_non_db_files(app, tmp_path):
 
     no_csrf = client.post("/api/db/replace", files={"file": ("x.db", b"hello")})
     assert no_csrf.status_code == 403
+
+
+def test_workbook_is_built_from_db_without_template(app, tmp_path):
+    from openpyxl import Workbook, load_workbook
+
+    client = login(app)
+    source = Workbook()
+    source.remove(source.active)
+    bundle = source.create_sheet("번들")
+    bundle.append(["번들바코드", "번들상품명", "입수", "상품코드", "상품명", "중분류"])
+    bundle.append(["8801111111112", "에쎄(보루)", 10, "8801111111111", "에쎄", "담배"])
+    source.create_sheet("종량제").append([compose_fixed_width_row("2800055100049", "강화종량제5L", "강화5L").decode("cp949")])
+    stores = source.create_sheet("점포코드")
+    stores.append(["현재점포코드", "점포명"])
+    stores.append(["V3414", "GS252테크노파크점"])
+    path = tmp_path / "통합.xlsx"
+    source.save(path)
+
+    preview = client.post("/api/workbook/preview", files={"file": ("통합.xlsx", path.read_bytes())}, headers=HEADERS).json()
+    applied = client.post("/api/workbook/apply", json={"targets": [t["key"] for t in preview["targets"]]}, headers=HEADERS).json()
+    assert any("점포코드 1건 보관" in line for line in applied["lines"]), applied
+    options = client.get("/api/outputs/options").json()
+    assert options["template"] is None and options["workbook_db"] == {"bundle_rows": 1, "store_rows": 1}
+
+    for slot in ("new", "full", "closed"):
+        upload(client, slot, master_bytes(GENERAL), name=f"{slot}.txt")
+    plans = [{"key": k, "appends": [], "filename": f"{k}.txt"} for k in ("leader", "member", "full_master", "closed_master")]
+    saved = client.post("/api/outputs/save", json={"plans": plans, "prefix": "x", "workbook": True}, headers=HEADERS).json()
+
+    assert any("통합 엑셀(DB로 만듦)" in line for line in saved["summary"]), saved["summary"]
+    archive = zipfile.ZipFile(io.BytesIO(client.get(saved["download"]).content))
+    workbook = load_workbook(io.BytesIO(archive.read("x_통합마스터.xlsx")))
+    assert workbook["점포코드"]["A2"].value == "V3414"
+    assert workbook["번들"]["F2"].value == "담배"
+
+
+def test_workbook_problem_does_not_block_txt_save(app):
+    client = login(app)
+    upload(client, "new", master_bytes(GENERAL))
+    saved = client.post(
+        "/api/outputs/save",
+        json={"plans": [{"key": "leader", "appends": [], "filename": "a.txt"}], "prefix": "x", "workbook": True},
+        headers=HEADERS,
+    ).json()
+    assert saved["ok"]
+    assert any("통합 엑셀 저장 안 됨" in line for line in saved["summary"])
+    assert zipfile.ZipFile(io.BytesIO(client.get(saved["download"]).content)).namelist() == ["a.txt"]

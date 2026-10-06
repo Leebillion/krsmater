@@ -146,3 +146,6 @@ curl http://localhost:3100/api/bundles/report
 - The editor can publish an output directly as the site's active master (server-to-server token `EDITOR_SHARED_TOKEN`).
 - Fixed: update/offline banner wrapper blocked clicks on the desktop header menu while shown.
 - Full details, deployment steps (nginx `/editor/`, systemd `krs-editor`), and verification: `MASTER_EDITOR.md`.
+- `DB 업데이트` button (master editor header): upload the PC app's `master_management.db` to replace the editor's shared product DB (validated, auto backup, no restart).
+- Source of truth: this repo is the main site repo. `editor/` is copied from the desktop project folder (`masternew`: `master_reducer/`, `web_app/`) with `scripts/sync-editor.ps1`; edit there, then sync.
+- Server update: `cd /home/krsmaster/app && git pull && npm run build && systemctl restart krs-editor`

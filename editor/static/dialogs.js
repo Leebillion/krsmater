@@ -603,8 +603,10 @@ export async function outputSaveDialog(onStatus) {
   }
 
   // 통합 엑셀
-  const workbookOn = el("input", { type: "checkbox", checked: Boolean(options.template) });
-  const templateName = el("span", { class: options.template ? "" : "muted", text: options.template || "올린 템플릿 없음" });
+  // 기본으로 함께 저장한다. DB로 만들므로 템플릿은 없어도 된다.
+  const workbookOn = el("input", { type: "checkbox", checked: true });
+  const templateName = el("span", { class: options.template ? "" : "muted", text: options.template || "없음 (필요 없음)" });
+  const dbReady = options.workbook_db.bundle_rows > 0 && options.workbook_db.store_rows > 0;
   const templateFile = el("input", { type: "file", accept: ".xlsx", hidden: true });
   const workbookName = el("input", { type: "text", value: options.workbook_filename, style: "flex:1" });
   templateFile.addEventListener("change", async () => {
@@ -624,6 +626,8 @@ export async function outputSaveDialog(onStatus) {
   const publishSelect = el("select", {},
     el("option", { value: "", text: "게시 안 함" }),
     ...options.outputs.filter((o) => o.available).map((o) => el("option", { value: o.key, text: o.label })));
+  // 기본 게시 대상: PDA Full (불러온 전체 마스터가 없어 저장할 수 없으면 '게시 안 함')
+  if (options.outputs.some((o) => o.key === "pda_full" && o.available)) publishSelect.value = "pda_full";
   const publishSection = options.publish_enabled
     ? el("fieldset", {},
         el("legend", { text: "사이트 게시 (KRS Master)" }),
@@ -646,10 +650,11 @@ export async function outputSaveDialog(onStatus) {
     el("fieldset", {},
       el("legend", { text: "통합 엑셀 (krs_gs25 임포트용)" }),
       el("label", {}, workbookOn, " 이번 출력으로 시트를 교체한 통합 엑셀도 저장"),
-      el("div", { class: "row-inline" }, el("span", { text: "템플릿 엑셀" }), templateName, templateFile,
+      el("div", { class: "row-inline" }, el("span", { text: "템플릿 엑셀(선택)" }), templateName, templateFile,
         el("button", { type: "button", text: "템플릿 올리기", onclick: () => templateFile.click() })),
       el("div", { class: "row-inline" }, el("span", { text: "저장 파일명" }), workbookName),
-      el("p", { class: "note", text: "└ 번들·종량제·서비스·점포코드·함수저장 시트와, 이번에 저장하지 않는 출력의 시트는 템플릿 그대로 복사됩니다(수식 포함). 템플릿은 모든 사용자가 같이 씁니다." }),
+      el("p", { class: "note", text: "└ 템플릿 없이 DB로 만듭니다: 번들·점포코드는 마지막 '통합 엑셀 가져오기' 때 보관한 내용, 종량제·서비스는 상품 DB, 팀장·팀원·전체·폐점은 이번 출력입니다. 템플릿은 선택 사항으로, 전체·폐점 출력을 저장하지 않을 때 그 시트를 채우는 데만 씁니다." }),
+      dbReady ? null : el("p", { class: "note warn", text: "└ DB에 번들 시트 원본·점포코드가 없습니다. ③ 상품 DB → 통합 엑셀 가져오기를 한 번 실행하거나, PC 앱에서 가져온 DB를 'DB 업데이트'로 올리세요." }),
       el("p", { class: "note", text: `└ 교체 시트: ${options.sheet_pairs.map(([label, sheet]) => `${label}→${sheet}`).join(", ")}` })),
     publishSection,
     el("p", { class: "note", text: "저장하면 선택한 파일을 zip 하나로 내려받습니다. PDA Short는 master.txt로 들어 있습니다." }));
